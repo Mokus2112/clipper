@@ -21,14 +21,20 @@ def save(cfg: dict, items: list[dict]) -> None:
 def add(cfg: dict, clip: dict, source: dict, file: Path) -> None:
     items = [i for i in load(cfg) if i["id"] != clip["id"]]
     tags = source.get("tags", [])
-    hashtags = " ".join(f"#{t.replace(' ', '')}" for t in tags[:3])
+    clip_tags = clip.get("hashtags") or [t.replace(" ", "") for t in tags]
+    hashtags = " ".join(f"#{t}" for t in clip_tags[:3])
     footer = cfg["upload"].get("description_footer", "")
+    # Campaign briefs often require a tag, mention or link in every post.
+    required = source.get("required_text", "")
+    social = " ".join(x for x in [clip.get("caption") or clip["title"], " ".join(f"#{t}" for t in clip_tags), required] if x)
     items.append({
         "id": clip["id"],
         "file": str(file),
         "title": clip["title"],
-        "description": "\n\n".join(x for x in [source.get("credit", ""), hashtags, footer] if x),
-        "tags": tags,
+        "description": "\n\n".join(x for x in [source.get("credit", ""), required, hashtags, footer] if x),
+        "tags": list(dict.fromkeys(tags + clip_tags)),
+        "tiktok": social,
+        "instagram": "\n\n".join(x for x in [social, source.get("credit", "")] if x),
         "score": clip["score"],
         "reason": clip["reason"],
         "duration": round(clip["end"] - clip["start"], 1),

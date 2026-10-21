@@ -18,11 +18,25 @@ def telegram_env(cfg: dict) -> tuple[str, str]:
 
 
 def caption(item: dict) -> str:
+    return f"Klip: {item['id']}\nPontszám: {item['score']}/10, {item['duration']} mp\nMiért: {item['reason']}"[:1024]
+
+
+def post_texts(item: dict) -> str:
     return (
-        f"Klip: {item['id']}\nPontszám: {item['score']}/10, {item['duration']} mp\n\n"
-        f"CÍM:\n{item['title']}\n\nLEÍRÁS:\n{item['description']}\n\n"
-        f"Miért: {item['reason']}"
-    )[:1024]
+        f"{item['id']}\n\n"
+        f"YOUTUBE CÍM:\n{item['title']}\n\nYOUTUBE LEÍRÁS:\n{item['description']}\n\n"
+        f"TIKTOK:\n{item.get('tiktok', item['title'])}\n\n"
+        f"INSTAGRAM:\n{item.get('instagram', item['title'])}"
+    )[:4096]
+
+
+def send(token: str, args: list[str], method: str) -> bool:
+    res = subprocess.run([tool("curl"), "-s", *args, f"https://api.telegram.org/bot{token}/{method}"],
+                         capture_output=True, text=True, timeout=600)
+    ok = json.loads(res.stdout or "{}").get("ok", False)
+    if not ok:
+        log(f"telegram {method} failed: {res.stdout[:300]}")
+    return ok
 
 
 def notify(cfg: dict, clip_ids: list[str] | None = None) -> int:
@@ -30,15 +44,11 @@ def notify(cfg: dict, clip_ids: list[str] | None = None) -> int:
     items = [i for i in review_queue.load(cfg)
              if (i["id"] in clip_ids if clip_ids else i["status"] == "pending" and not i.get("notified"))]
     for item in items:
-        res = subprocess.run(
-            [tool("curl"), "-s", "-F", f"chat_id={chat_id}", "-F", f"caption={caption(item)}",
-             "-F", "supports_streaming=true", "-F", f"video=@{item['file']}",
-             f"https://api.telegram.org/bot{token}/sendVideo"],
-            capture_output=True, text=True, timeout=600,
-        )
-        if not json.loads(res.stdout or "{}").get("ok"):
-            log(f"telegram send failed for {item['id']}: {res.stdout[:300]}")
+        video = ["-F", f"chat_id={chat_id}", "-F", f"caption={caption(item)}",
+                 "-F", "supports_streaming=true", "-F", f"video=@{item['file']}"]
+        if not send(token, video, "sendVideo"):
             continue
+        send(token, ["-F", f"chat_id={chat_id}", "-F", f"text={post_texts(item)}"], "sendMessage")
         review_queue.set_status(cfg, item["id"], item["status"], notified=True)
         log(f"sent {item['id']} to telegram")
     return len(items)

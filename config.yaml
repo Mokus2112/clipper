@@ -62,7 +62,7 @@ captions:
   highlight: "&H0000E5FF"  # ASS BGR: yellow
   y_center: 1180           # caption baseline in center layout (keeps clear of Shorts UI)
   y_split: 820             # caption position in split layout (just under the seam)
-  y_fit: 1420              # fit layout: below the centred 16:9 frame
+  y_fit: 1360              # fit layout: just below the centred frame, above TikTok's caption area
 
 hook:
   enabled: true
@@ -95,6 +95,7 @@ sources:
     facecam: null
     tags: [streamer, clips, funny]
     credit: "Credit: Example Streamer (https://www.youtube.com/@example)"
+    required_text: ""     # tag/mention/link the campaign brief requires in every post
 
   - name: test-speed      # pipeline test only, not uploaded
     streamer: IShowSpeed

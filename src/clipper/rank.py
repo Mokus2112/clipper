@@ -26,12 +26,14 @@ Hard rules:
   (e.g. "He bet his car on this", "Chat lied to him"). No emojis, no lies, not just the streamer's name.
 - title: under 70 characters, curiosity-driven, includes the streamer name.
 - story: one sentence, "setup -> payoff".
+- caption: one short line for TikTok/Instagram, under 100 characters, curiosity-driven, may differ from the title.
+- hashtags: 3-5 relevant lowercase hashtags without "#" (streamer name first, no generic spam like fyp/viral).
 - score: 1-10 for Shorts potential. Be harsh: 5 = average, 7 = clearly good, 9 = viral. Only return clips scoring 7+.
 - If nothing qualifies, return [] and nothing else. Returning [] is a correct answer for a boring stream.
 
 Return ONLY a JSON array:
 [{{"start": s, "end": s, "payoff_start": s, "payoff_end": s, "hook": "...", "title": "...", "story": "...",
-"score": n, "reason": "..."}}]
+"caption": "...", "hashtags": ["..."], "score": n, "reason": "..."}}]
 
 Transcript:
 {transcript}
@@ -122,6 +124,8 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
             "hook": p["hook"].strip(),
             "title": p["title"].strip()[:95],
             "story": p.get("story", ""),
+            "caption": p.get("caption", p["title"]).strip(),
+            "hashtags": [h.strip().lstrip("#").replace(" ", "") for h in p.get("hashtags", []) if h.strip()][:5],
             "score": p["score"],
             "reason": p.get("reason", ""),
         })
