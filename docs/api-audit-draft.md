@@ -27,7 +27,8 @@ other YouTube users.
 - Quota: default 10,000 units/day is sufficient
 
 ## Links required by the form
-- Privacy policy: TODO GitHub Pages URL (docs/privacy.html)
+- Privacy policy: https://mokus2112.github.io/clipper-privacy/
+- Source repository: https://github.com/Mokus2112/clipper
 - Contact email: adi.bereczky@gmail.com
 - Terms of service: TODO if the form insists; otherwise state "internal tool, no end users"
 
