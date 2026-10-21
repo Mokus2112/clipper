@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .common import job_dir, log, probe, source_video, tool, write_json
+from .common import job_dir, log, probe, read_json, source_video, tool, write_json
 
 SR = 16000
 
@@ -35,8 +35,16 @@ def loudness_per_second(video: Path) -> np.ndarray:
     return 20 * np.log10(rms + 1e-6)
 
 
-def chat_per_second(jd: Path, seconds: int) -> np.ndarray:
-    """Count YouTube live chat replay messages per second (yt-dlp live_chat.json, one JSON object per line)."""
+def hms(t: str) -> int:
+    secs = 0
+    for part in t.split(":"):
+        secs = secs * 60 + int(float(part))
+    return secs
+
+
+def chat_per_second(jd: Path, seconds: int, offset: int = 0) -> np.ndarray:
+    """Count YouTube live chat replay messages per second (yt-dlp live_chat.json, one JSON object per line).
+    offset: start of the cut section, since chat timestamps refer to the full VOD."""
     counts = np.zeros(seconds)
     files = list(jd.glob("*.live_chat.json"))
     if not files:
@@ -45,7 +53,7 @@ def chat_per_second(jd: Path, seconds: int) -> np.ndarray:
         for line in f:
             try:
                 item = json.loads(line)["replayChatItemAction"]
-                t = int(item["videoOffsetTimeMsec"]) // 1000
+                t = int(item["videoOffsetTimeMsec"]) // 1000 - offset
             except (KeyError, ValueError, json.JSONDecodeError):
                 continue
             if 0 <= t < seconds:
@@ -79,7 +87,8 @@ def detect(cfg: dict, job_id: str) -> list[dict]:
     log("measuring loudness...")
     db = loudness_per_second(video)
     audio_z = smooth(robust_z(db, dc["baseline_window"]))
-    chat = chat_per_second(jd, len(db))
+    section = (read_json(jd / "job.json", {}) or {}).get("section")
+    chat = chat_per_second(jd, len(db), hms(section.split("-")[0]) if section else 0)
     chat_z = smooth(robust_z(chat, dc["baseline_window"]), 5) if chat.any() else np.zeros_like(audio_z)
     score = audio_z + dc["chat_weight"] * chat_z
 

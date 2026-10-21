@@ -10,13 +10,13 @@ def even(x: float) -> int:
     return int(x) // 2 * 2
 
 
-def face_center_x(video: Path, start: float, end: float) -> tuple[float | None, float]:
-    """Median horizontal face position (0..1) over the clip, sampled twice per second, plus the hit ratio."""
+def face_boxes(video: Path, start: float, end: float) -> tuple[list[tuple[float, float, float, float]], int]:
+    """Largest face per frame as (x, y, w, h) fractions of the frame, sampled twice per second."""
     import cv2
 
     cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     cap = cv2.VideoCapture(str(video))
-    xs, samples = [], 0
+    boxes, samples = [], 0
     t = start
     while t < end:
         samples += 1
@@ -25,33 +25,67 @@ def face_center_x(video: Path, start: float, end: float) -> tuple[float | None, 
         t += 0.5
         if not ok:
             continue
-        scale = 480 / frame.shape[1]
+        # 640 px keeps small facecam faces detectable while staying fast.
+        scale = 640 / frame.shape[1]
         small = cv2.resize(frame, None, fx=scale, fy=scale)
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=6, minSize=(24, 24))
+        faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=6, minSize=(20, 20))
         if len(faces):
             x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-            xs.append((x + w / 2) / small.shape[1])
+            H, W = small.shape[:2]
+            boxes.append((x / W, y / H, w / W, h / H))
     cap.release()
-    if not xs:
-        return None, 0.0
-    xs.sort()
-    return xs[len(xs) // 2], len(xs) / max(samples, 1)
+    return boxes, samples
 
 
-def pick_layout(cfg: dict, source: dict, video: Path, start: float, end: float) -> tuple[str, float | None]:
-    """split/center/fit as configured; 'auto' crops on a face only if one is visible most of the time."""
+def median(xs: list[float]) -> float:
+    xs = sorted(xs)
+    return xs[len(xs) // 2]
+
+
+def facecam_rect(boxes: list, info: dict, panel_aspect: float) -> list[float]:
+    """A crop around a small, static face (a streamer's facecam overlay) with the top panel's aspect ratio."""
+    sw, sh = info["width"], info["height"]
+    fx, fy, fw, fh = (median([b[i] for b in boxes]) for i in range(4))
+    w = min(fw * sw * 3.2, sw)
+    h = min(w / panel_aspect, sh)
+    cx, cy = (fx + fw / 2) * sw, (fy + fh / 2) * sh + h * 0.12
+    x = min(max(cx - w / 2, 0), sw - w)
+    y = min(max(cy - h / 2, 0), sh - h)
+    return [x / sw, y / sh, w / sw, h / sh]
+
+
+def pick_layout(cfg: dict, source: dict, video: Path, info: dict, start: float,
+                end: float) -> tuple[str, float | None, list[float] | None]:
+    """Returns (layout, face x for center crop, facecam rect for split).
+    auto: a small face that never moves is a facecam overlay -> split; a big, steady face -> center crop;
+    anything else -> fit, so the action is never cropped away."""
+    rc = cfg["render"]
     layout = source.get("layout", "auto")
     if layout == "split" and source.get("facecam"):
-        return "split", None
-    if layout in ("center", "auto"):
-        cx, ratio = face_center_x(video, start, end)
-        if layout == "center" or ratio >= cfg["render"]["face_min_ratio"]:
-            return "center", cx
-    return "fit", None
+        return "split", None, source["facecam"]
+    if layout == "fit":
+        return "fit", None, None
+    boxes, samples = face_boxes(video, start, end)
+    ratio = len(boxes) / max(samples, 1)
+    cx = median([b[0] + b[2] / 2 for b in boxes]) if boxes else None
+    if layout == "center":
+        return "center", cx, None
+    if ratio >= rc["face_min_ratio"]:
+        xs = [b[0] + b[2] / 2 for b in boxes]
+        ys = [b[1] + b[3] / 2 for b in boxes]
+        spread = max(max(xs) - min(xs), max(ys) - min(ys)) if len(boxes) > 2 else 1.0
+        small = median([b[2] for b in boxes]) < rc["facecam_max_face"]
+        if small and spread < rc["facecam_max_spread"]:
+            top_h = even(rc["height"] * rc["split_top_ratio"])
+            return "split", None, facecam_rect(boxes, info, rc["width"] / top_h)
+        if not small:
+            return "center", cx, None
+    return "fit", None, None
 
 
-def layout_filter(cfg: dict, source: dict, info: dict, layout: str, cx: float | None, inp: str, out: str) -> str:
+def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam: list[float] | None,
+                  inp: str, out: str) -> str:
     rc = cfg["render"]
     W, H = rc["width"], rc["height"]
     sw, sh = info["width"], info["height"]
@@ -65,7 +99,7 @@ def layout_filter(cfg: dict, source: dict, info: dict, layout: str, cx: float | 
             f"[{out}bg][{out}fg]overlay=(W-w)/2:(H-h)/2,setsar=1[{out}]"
         )
     if layout == "split":
-        fx, fy, fw, fh = source["facecam"]
+        fx, fy, fw, fh = facecam
         top_h = even(H * rc["split_top_ratio"])
         bot_h = H - top_h
         # Gameplay: centre crop of the full frame at the bottom panel's aspect ratio.
@@ -174,13 +208,13 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         if rc["cold_open"] and cold[0] is not None and cold[1] - cold[0] >= 0.5:
             segments.append((cold[0], cold[1], 0.0))
         segments.append((main[0], main[1], sum(e - s for s, e, _ in segments)))
-        layout, cx = pick_layout(cfg, source, video, main[0], main[1])
+        layout, cx, cam = pick_layout(cfg, source, video, info, main[0], main[1])
         (cdir / "captions.ass").write_text(build_ass(cfg, clip, segments, layout))
 
         inputs, graph, concat = [], [], ""
         for i, (s, e, _) in enumerate(segments):
             inputs += ["-ss", f"{s:.2f}", "-t", f"{e - s:.2f}", "-i", video.resolve()]
-            graph.append(layout_filter(cfg, source, info, layout, cx, f"{i}:v", f"l{i}"))
+            graph.append(layout_filter(cfg, info, layout, cx, cam, f"{i}:v", f"l{i}"))
             concat += f"[l{i}][{i}:a:0]"
         audio = ",loudnorm=I=-14:TP=-1.5:LRA=11" if rc["loudnorm"] else ""
         graph.append(f"{concat}concat=n={len(segments)}:v=1:a=1[cv][ca0]")

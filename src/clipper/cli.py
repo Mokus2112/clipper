@@ -15,7 +15,8 @@ def main() -> None:
         s = sub.add_parser(name, help="full pipeline" if name == "run" else "download/link a VOD into a new job")
         s.add_argument("source", help="source name from config.yaml")
         s.add_argument("input", help="VOD URL or local file path")
-        s.add_argument("--section", help="only download a range, e.g. 01:10:00-01:40:00")
+        s.add_argument("--section", help="only keep a range, e.g. 01:10:00-01:40:00")
+        s.add_argument("--no-notify", action="store_true", help="don't send the clips to Telegram")
     for name in ("detect", "transcribe", "rank", "captions", "render"):
         s = sub.add_parser(name, help=f"run the {name} step on a job")
         s.add_argument("job")
@@ -50,7 +51,7 @@ def main() -> None:
             if rank(cfg, job):
                 transcribe_clips(cfg, job)
                 render(cfg, job)
-                if cfg["telegram"]["notify"]:
+                if cfg["telegram"]["notify"] and not a.no_notify:
                     from .notify import notify
                     notify(cfg)
             if not cfg["fetch"]["keep_source"]:

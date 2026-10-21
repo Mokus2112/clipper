@@ -8,6 +8,7 @@ paths:
 fetch:
   max_height: 1080
   chat: true          # try to download YouTube live chat replay (used for highlight scoring)
+  chat_timeout: 900   # seconds to wait for the live chat download after the video is done
   keep_source: false  # `run` deletes the VOD after rendering; clips and transcripts are kept
 
 detect:
@@ -48,6 +49,8 @@ render:
   cold_open: true         # start with the payoff moment, then cut back to the setup
   cold_open_max: 2.5
   face_min_ratio: 0.5     # auto layout: face-crop only if a face is visible in >= 50% of sampled frames
+  facecam_max_face: 0.12  # auto: a face narrower than 12% of the frame is treated as a facecam overlay...
+  facecam_max_spread: 0.06  # ...if its centre moves less than this (fraction of frame) over the clip
   fit_zoom: 1.2           # fit layout: enlarge the centred frame and trim the sides a bit
   split_top_ratio: 0.365  # split layout: facecam 1080x700 on top
 
@@ -60,9 +63,9 @@ captions:
   uppercase: true
   color: "&H00FFFFFF"      # ASS BGR: white
   highlight: "&H0000E5FF"  # ASS BGR: yellow
-  y_center: 1180           # caption baseline in center layout (keeps clear of Shorts UI)
+  y_center: 1260           # caption baseline in center layout (keeps clear of Shorts UI)
   y_split: 820             # caption position in split layout (just under the seam)
-  y_fit: 1360              # fit layout: just below the centred frame, above TikTok's caption area
+  y_fit: 1420              # fit layout: below the centred frame, still above the platforms' caption area
 
 hook:
   enabled: true
@@ -106,3 +109,17 @@ sources:
     tags: [ishowspeed, speed, stream]
 
     credit: "Credit: IShowSpeed (https://www.youtube.com/@IShowSpeed)"
+
+  # Practice sources: overnight pipeline evaluation only, never uploaded.
+  - name: practice-kai
+    streamer: Kai Cenat
+    channel_url: https://www.youtube.com/@KaiCenatLive
+    layout: auto
+    tags: [kaicenat, kai, stream]
+    credit: "Credit: Kai Cenat"
+  - name: practice-caseoh
+    streamer: CaseOh
+    channel_url: https://www.youtube.com/@caseoh_
+    layout: auto
+    tags: [caseoh, gaming, stream]
+    credit: "Credit: CaseOh"
