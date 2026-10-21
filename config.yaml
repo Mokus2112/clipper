@@ -1,0 +1,101 @@
+# Clipper pipeline configuration.
+
+paths:
+  data: data          # jobs, renders, review queue
+  secrets: secrets    # client_secret.json + token.json for the YouTube API
+  fonts: fonts
+
+fetch:
+  max_height: 1080
+  chat: true          # try to download YouTube live chat replay (used for highlight scoring)
+  keep_source: false  # `run` deletes the VOD after rendering; clips and transcripts are kept
+
+detect:
+  candidates: 40      # how many loudness/chat peaks to keep as hints for the ranker
+  spike_z: 2.0        # peaks at or above this score are marked as <<SPIKE>> in the transcript
+  pre_roll: 25        # seconds before the peak included in a candidate window
+  post_roll: 20       # seconds after the peak
+  min_gap: 90         # minimum seconds between two candidate peaks
+  baseline_window: 301  # rolling median window (s) for loudness baseline
+  chat_weight: 1.0
+  skip_edges: 60      # ignore the first/last N seconds (intro/outro screens)
+
+whisper:
+  full_model: base    # fast pass over the whole VOD, used to find stories
+  clip_model: small   # accurate word timestamps for the selected clips (captions)
+  chunk_sec: 600      # full pass works in chunks to keep memory flat
+  language: null      # null = auto-detect
+  threads: 4
+
+rank:
+  model: sonnet       # passed to `claude -p --model`
+  clips_per_vod: 5
+  min_score: 7        # drop clips the ranker scores below this (1-10); no clip is better than a weak clip
+
+clip:
+  min_sec: 18
+  max_sec: 50
+  pad_start: 0.15
+  pad_end: 0.5
+
+render:
+  width: 1080
+  height: 1920
+  fps: 30
+  crf: 20
+  preset: medium
+  loudnorm: true
+  cold_open: true         # start with the payoff moment, then cut back to the setup
+  cold_open_max: 2.5
+  split_top_ratio: 0.365  # split layout: facecam 1080x700 on top
+
+captions:
+  font: Montserrat ExtraBold
+  size: 88
+  outline: 8
+  max_words: 3
+  max_chunk_sec: 1.4
+  uppercase: true
+  color: "&H00FFFFFF"      # ASS BGR: white
+  highlight: "&H0000E5FF"  # ASS BGR: yellow
+  y_center: 1180           # caption baseline in center layout (keeps clear of Shorts UI)
+  y_split: 820             # caption position in split layout (just under the seam)
+
+hook:
+  enabled: true
+  seconds: 2.5
+  size: 72
+  y: 330
+
+telegram:
+  notify: true           # `run` sends new clips to Telegram for review and manual upload
+  env_file: /home/badi/Desktop/Codee/.env   # TELEGRAM_BOT_TOKEN + ALLOWED_CHAT_ID
+
+upload:
+  # API uploads from an unaudited Google Cloud project are locked private; manual upload until the audit passes.
+  privacy: private       # private | unlisted | public; start private until the pipeline is trusted
+  category_id: "20"      # 20 = Gaming, 24 = Entertainment
+  daily_limit: 3
+  description_footer: ""
+
+# One entry per permitted source (e.g. a Whop Content Rewards campaign).
+# layout: center = face-tracked 9:16 crop (IRL / just chatting)
+#         split  = facecam on top, gameplay below; facecam is [x, y, w, h] as fractions of the source frame
+sources:
+  - name: example
+    streamer: Example Streamer
+    channel_url: https://www.youtube.com/@example
+    campaign_url: ""
+    layout: center
+    facecam: null
+    tags: [streamer, clips, funny]
+    credit: "Credit: Example Streamer (https://www.youtube.com/@example)"
+
+  - name: test-speed      # pipeline test only, not uploaded
+    streamer: IShowSpeed
+    channel_url: https://www.youtube.com/@IShowSpeed
+    campaign_url: ""
+    layout: center
+    facecam: null
+    tags: [ishowspeed, speed, stream]
+    credit: "Credit: IShowSpeed (https://www.youtube.com/@IShowSpeed)"
