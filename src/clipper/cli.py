@@ -79,8 +79,9 @@ def main() -> None:
             print(f"[{i['status']}] {i['id']}  score {i['score']}  {i['duration']}s\n  {i['title']}\n  {i['file']}\n")
     elif a.cmd in ("approve", "reject"):
         for cid in a.clip_ids:
-            review_queue.set_status(cfg, cid, "approved" if a.cmd == "approve" else "rejected")
-            print(f"{cid}: {a.cmd}d")
+            status = "approved" if a.cmd == "approve" else "rejected"
+            review_queue.set_status(cfg, cid, status)
+            print(f"{cid}: {status}")
     elif a.cmd == "upload":
         from .upload import upload
         upload(cfg, a.limit)

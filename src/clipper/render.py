@@ -10,15 +10,16 @@ def even(x: float) -> int:
     return int(x) // 2 * 2
 
 
-def face_center_x(video: Path, start: float, end: float) -> float | None:
-    """Median horizontal face position (0..1) over the clip, sampled twice per second."""
+def face_center_x(video: Path, start: float, end: float) -> tuple[float | None, float]:
+    """Median horizontal face position (0..1) over the clip, sampled twice per second, plus the hit ratio."""
     import cv2
 
     cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     cap = cv2.VideoCapture(str(video))
-    xs = []
+    xs, samples = [], 0
     t = start
     while t < end:
+        samples += 1
         cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
         ok, frame = cap.read()
         t += 0.5
@@ -33,16 +34,37 @@ def face_center_x(video: Path, start: float, end: float) -> float | None:
             xs.append((x + w / 2) / small.shape[1])
     cap.release()
     if not xs:
-        return None
+        return None, 0.0
     xs.sort()
-    return xs[len(xs) // 2]
+    return xs[len(xs) // 2], len(xs) / max(samples, 1)
 
 
-def layout_filter(cfg: dict, source: dict, info: dict, cx: float | None, inp: str, out: str) -> str:
+def pick_layout(cfg: dict, source: dict, video: Path, start: float, end: float) -> tuple[str, float | None]:
+    """split/center/fit as configured; 'auto' crops on a face only if one is visible most of the time."""
+    layout = source.get("layout", "auto")
+    if layout == "split" and source.get("facecam"):
+        return "split", None
+    if layout in ("center", "auto"):
+        cx, ratio = face_center_x(video, start, end)
+        if layout == "center" or ratio >= cfg["render"]["face_min_ratio"]:
+            return "center", cx
+    return "fit", None
+
+
+def layout_filter(cfg: dict, source: dict, info: dict, layout: str, cx: float | None, inp: str, out: str) -> str:
     rc = cfg["render"]
     W, H = rc["width"], rc["height"]
     sw, sh = info["width"], info["height"]
-    if source.get("layout") == "split" and source.get("facecam"):
+    if layout == "fit":
+        # Whole frame in the middle over a blurred, darkened copy: nothing important gets cropped away.
+        return (
+            f"[{inp}]split[{out}a][{out}b];"
+            f"[{out}a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
+            f"boxblur=20:2,eq=brightness=-0.12[{out}bg];"
+            f"[{out}b]scale={even(W * rc['fit_zoom'])}:-2,crop={W}:ih[{out}fg];"
+            f"[{out}bg][{out}fg]overlay=(W-w)/2:(H-h)/2,setsar=1[{out}]"
+        )
+    if layout == "split":
         fx, fy, fw, fh = source["facecam"]
         top_h = even(H * rc["split_top_ratio"])
         bot_h = H - top_h
@@ -85,11 +107,11 @@ def chunk_words(words: list[dict], max_words: int, max_sec: float) -> list[list[
     return chunks
 
 
-def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]], split: bool) -> str:
+def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]], layout: str) -> str:
     """ASS captions for the output timeline; segments map source ranges to output offsets (cold open + main)."""
     cc, hc, rc = cfg["captions"], cfg["hook"], cfg["render"]
     W, H = rc["width"], rc["height"]
-    y = cc["y_split"] if split else cc["y_center"]
+    y = cc[f"y_{layout}"]
 
     lines = [
         "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}", "WrapStyle: 0", "",
@@ -140,7 +162,6 @@ def render(cfg: dict, job_id: str) -> list[Path]:
     if clips is None:
         raise SystemExit("run rank first")
     fonts = path_of(cfg, "fonts")
-    split = source.get("layout") == "split" and bool(source.get("facecam"))
 
     outputs = []
     for clip in clips:
@@ -153,13 +174,13 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         if rc["cold_open"] and cold[0] is not None and cold[1] - cold[0] >= 0.5:
             segments.append((cold[0], cold[1], 0.0))
         segments.append((main[0], main[1], sum(e - s for s, e, _ in segments)))
-        (cdir / "captions.ass").write_text(build_ass(cfg, clip, segments, split))
+        layout, cx = pick_layout(cfg, source, video, main[0], main[1])
+        (cdir / "captions.ass").write_text(build_ass(cfg, clip, segments, layout))
 
-        cx = None if split else face_center_x(video, main[0], main[1])
         inputs, graph, concat = [], [], ""
         for i, (s, e, _) in enumerate(segments):
             inputs += ["-ss", f"{s:.2f}", "-t", f"{e - s:.2f}", "-i", video.resolve()]
-            graph.append(layout_filter(cfg, source, info, cx, f"{i}:v", f"l{i}"))
+            graph.append(layout_filter(cfg, source, info, layout, cx, f"{i}:v", f"l{i}"))
             concat += f"[l{i}][{i}:a:0]"
         audio = ",loudnorm=I=-14:TP=-1.5:LRA=11" if rc["loudnorm"] else ""
         graph.append(f"{concat}concat=n={len(segments)}:v=1:a=1[cv][ca0]")
@@ -178,5 +199,5 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         write_json(cdir / "clip.json", clip)
         review_queue.add(cfg, clip, source, out)
         outputs.append(out)
-        log(f"rendered {clip['id']} ({sum(e - s for s, e, _ in segments):.1f}s, cold open: {len(segments) > 1})")
+        log(f"rendered {clip['id']} ({sum(e - s for s, e, _ in segments):.1f}s, cold open: {len(segments) > 1}, layout: {layout})")
     return outputs

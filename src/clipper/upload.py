@@ -23,7 +23,9 @@ def credentials(cfg: dict):
         client = secrets / "client_secret.json"
         if not client.exists():
             raise SystemExit(f"missing {client}: create an OAuth desktop client in Google Cloud Console")
-        creds = InstalledAppFlow.from_client_secrets_file(str(client), SCOPES).run_local_server(port=0)
+        flow = InstalledAppFlow.from_client_secrets_file(str(client), SCOPES)
+        creds = flow.run_local_server(port=8765, open_browser=False,
+                                      authorization_prompt_message="Open this URL in a browser on this machine: {url}")
     token.write_text(creds.to_json())
     token.chmod(0o600)
     return creds

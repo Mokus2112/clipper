@@ -5,12 +5,15 @@ Streamer VOD -> YouTube Shorts pipeline. Only use sources you have permission to
 ## Steps
 
 1. `fetch`: download the VOD (yt-dlp) or link a local file into `data/jobs/<job>/`
-2. `detect`: loudness spikes (+ YouTube live chat velocity if available) -> candidate windows
-3. `transcribe`: faster-whisper word timestamps, only for the candidate windows
-4. `rank`: `claude -p` picks the best moments, writes hook + title, scores 1-10
-5. `render`: 1080x1920, face-tracked crop or facecam/gameplay split, word-by-word captions, hook overlay
-6. `review` / `approve` / `reject`: human gate, every clip waits in `data/queue.json`
-7. `upload`: YouTube Data API, approved clips only, `upload.daily_limit` per day
+2. `detect`: loudness spikes (+ YouTube live chat velocity if available), used as hints for the ranker
+3. `transcribe`: fast full-VOD transcript (whisper base); `captions`: accurate word timestamps for chosen clips
+4. `rank`: `claude -p` reads the whole transcript, picks self-contained setup -> payoff stories, scores 1-10 (keeps 7+)
+5. `render`: 1080x1920, cold open (payoff first), auto layout (face crop / blurred-background fit / facecam split),
+   word-by-word captions, hook overlay
+6. `notify`: sends new clips to Telegram for review; upload manually until the API audit passes
+7. `review` / `approve` / `reject`: human gate, every clip waits in `data/queue.json`
+8. `upload`: YouTube Data API, approved clips only, `upload.daily_limit` per day
+9. `cleanup`: `run` deletes the source VOD automatically when done (`fetch.keep_source`)
 
 ## Usage
 
@@ -33,4 +36,6 @@ Each step can be re-run on its own: `uv run clipper rank <job> --min-score 5`.
 
 - CPU only: Whisper `small` takes ~13 s per 45 s window; rendering runs at roughly 0.6x realtime on 4 cores.
 - Face crop is static per clip (median face position), no dynamic tracking yet.
+- Section downloads (`--section`) stream through ffmpeg at network speed: ~25 min for 45 min of 1080p60.
+- API uploads from an unaudited project are locked private (see docs/api-audit-draft.md).
 - No music/Content ID detection yet; keep clips under 60 s.
