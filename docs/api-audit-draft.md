@@ -1,3 +1,7 @@
+> **Probably not needed (2026-10-21):** the official videos.insert reference now says "Videos uploaded from
+> unverified API projects are not restricted to private viewing mode." Confirm with one test upload first;
+> keep this draft only in case the lock still applies in practice.
+
 # YouTube API Services audit: draft answers
 
 Form: https://support.google.com/youtube/contact/yt_api_form ("Audit and quota extension")

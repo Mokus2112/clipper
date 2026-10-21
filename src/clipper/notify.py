@@ -1,4 +1,4 @@
-"""Send rendered clips to Telegram for review and manual upload (API uploads stay private until the audit passes)."""
+"""Send rendered clips to Telegram for review, with copy-paste post texts per platform."""
 
 import json
 import subprocess

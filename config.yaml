@@ -78,7 +78,8 @@ telegram:
   env_file: /home/badi/Desktop/Codee/.env   # TELEGRAM_BOT_TOKEN + ALLOWED_CHAT_ID
 
 upload:
-  # API uploads from an unaudited Google Cloud project are locked private; manual upload until the audit passes.
+  # The videos.insert docs (checked 2026-10-21) say unverified projects are no longer locked to private.
+  # Verify once with a test upload before switching to public.
   privacy: private       # private | unlisted | public; start private until the pipeline is trusted
   category_id: "20"      # 20 = Gaming, 24 = Entertainment
   daily_limit: 3

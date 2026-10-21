@@ -10,7 +10,7 @@ Streamer VOD -> YouTube Shorts pipeline. Only use sources you have permission to
 4. `rank`: `claude -p` reads the whole transcript, picks self-contained setup -> payoff stories, scores 1-10 (keeps 7+)
 5. `render`: 1080x1920, cold open (payoff first), auto layout (face crop / blurred-background fit / facecam split),
    word-by-word captions, hook overlay
-6. `notify`: sends new clips to Telegram for review; upload manually until the API audit passes
+6. `notify`: sends new clips to Telegram for review
 7. `review` / `approve` / `reject`: human gate, every clip waits in `data/queue.json`
 8. `upload`: YouTube Data API, approved clips only, `upload.daily_limit` per day
 9. `cleanup`: `run` deletes the source VOD automatically when done (`fetch.keep_source`)
@@ -37,5 +37,6 @@ Each step can be re-run on its own: `uv run clipper rank <job> --min-score 5`.
 - CPU only: Whisper `small` takes ~13 s per 45 s window; rendering runs at roughly 0.6x realtime on 4 cores.
 - Face crop is static per clip (median face position), no dynamic tracking yet.
 - Section downloads (`--section`) stream through ffmpeg at network speed: ~25 min for 45 min of 1080p60.
-- API uploads from an unaudited project are locked private (see docs/api-audit-draft.md).
+- YouTube: per the current videos.insert docs, unverified projects are no longer locked private and uploads have
+  their own quota bucket (100/day). Not yet confirmed with a real public upload.
 - No music/Content ID detection yet; keep clips under 60 s.
