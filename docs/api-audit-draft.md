@@ -1,14 +1,14 @@
 # YouTube API Services audit: draft answers
 
 Form: https://support.google.com/youtube/contact/yt_api_form ("Audit and quota extension")
-Project: clipper-512318 (OAuth client type: Desktop app, app name "Clipper Uploader")
+Project: clipper-512318 (OAuth client type: Desktop app, app name "Clip")
 
 ## Reason for request
 Remove the "private-only" restriction on videos uploaded via videos.insert from an unverified project.
 No quota increase needed (expected usage: 1-3 uploads/day, ~5,000 units/day, below the default 10,000).
 
 ## API client description
-Clipper Uploader is a private, single-user command-line tool run by the channel owner on their own computer.
+Clip (Clipper Uploader) is a private, single-user command-line tool run by the channel owner on their own computer.
 It uploads short-form videos (YouTube Shorts) that the owner has edited and manually approved to the owner's
 own YouTube channel. It is not offered to other users, has no public website, and stores no data about
 other YouTube users.
