@@ -22,13 +22,18 @@ Hard rules:
 - Clip length (start..end): {min_sec}-{max_sec} seconds. Absolute seconds from the transcript.
 - payoff_start/payoff_end: the 1.0-2.5 s peak moment INSIDE the clip (the scream, the punchline, the reaction).
   It is shown first as a cold open before the clip plays from the setup.
-- hook: on-screen text, 3-7 words, states the stakes or the question the clip answers
-  (e.g. "He bet his car on this", "Chat lied to him"). No emojis, no lies, not just the streamer's name.
+- hook: on-screen text, 3-7 words, shown over the cold open. It must create tension or a question that only
+  watching the clip answers. Good: "He bet his car on this", "Chat lied to him", "She was not ready for this",
+  "This cost him $10,000". Bad (descriptive, no tension): "Kai's honest review of the greens",
+  "Funny moment on stream", "Speed at the zoo". No emojis, no lies, not just the streamer's name.
 - title: under 70 characters, curiosity-driven, includes the streamer name.
 - story: one sentence, "setup -> payoff".
 - caption: one short line for TikTok/Instagram, under 100 characters, curiosity-driven, may differ from the title.
 - hashtags: 3-5 relevant lowercase hashtags without "#" (streamer name first, no generic spam like fyp/viral).
 - score: 1-10 for Shorts potential. Be harsh: 5 = average, 7 = clearly good, 9 = viral. Only return clips scoring 7+.
+  Test: would a stranger scrolling past stop within 1 second, and would they share it? Mild jokes, food reviews,
+  casual banter and inside jokes are 5-6 at most. Loud genuine reactions, fails, shocking reveals, wins/losses
+  with stakes, and chaos involving other people score higher.
 - If nothing qualifies, return [] and nothing else. Returning [] is a correct answer for a boring stream.
 
 Return ONLY a JSON array:

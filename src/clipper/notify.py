@@ -18,7 +18,8 @@ def telegram_env(cfg: dict) -> tuple[str, str]:
 
 
 def caption(item: dict) -> str:
-    return f"Klip: {item['id']}\nPontszám: {item['score']}/10, {item['duration']} mp\nMiért: {item['reason']}"[:1024]
+    music = f", zene: {item['music']:.0%}" if item.get("music") is not None else ""
+    return f"Klip: {item['id']}\nPontszám: {item['score']}/10, {item['duration']} mp{music}\nMiért: {item['reason']}"[:1024]
 
 
 def post_texts(item: dict) -> str:

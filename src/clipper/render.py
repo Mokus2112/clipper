@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from .common import find_source, job_dir, log, path_of, probe, read_json, run, source_video, tool, write_json
+from .common import ROOT, find_source, job_dir, log, path_of, probe, read_json, run, source_video, tool, write_json
 from . import review_queue
 
 
@@ -14,7 +14,9 @@ def face_boxes(video: Path, start: float, end: float) -> tuple[list[tuple[float,
     """Largest face per frame as (x, y, w, h) fractions of the frame, sampled twice per second."""
     import cv2
 
-    cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    # YuNet (OpenCV zoo, 230 KB) finds small and angled facecam faces far more reliably than Haar cascades.
+    detector = cv2.FaceDetectorYN.create(str(ROOT / "models" / "face_detection_yunet_2023mar.onnx"), "",
+                                         (640, 360), 0.6, 0.3, 50)
     cap = cv2.VideoCapture(str(video))
     boxes, samples = [], 0
     t = start
@@ -28,12 +30,12 @@ def face_boxes(video: Path, start: float, end: float) -> tuple[list[tuple[float,
         # 640 px keeps small facecam faces detectable while staying fast.
         scale = 640 / frame.shape[1]
         small = cv2.resize(frame, None, fx=scale, fy=scale)
-        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=6, minSize=(20, 20))
-        if len(faces):
-            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-            H, W = small.shape[:2]
-            boxes.append((x / W, y / H, w / W, h / H))
+        H, W = small.shape[:2]
+        detector.setInputSize((W, H))
+        _, faces = detector.detect(small)
+        if faces is not None and len(faces):
+            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])[:4]
+            boxes.append((float(max(x, 0) / W), float(max(y, 0) / H), float(w / W), float(h / H)))
     cap.release()
     return boxes, samples
 
@@ -155,7 +157,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
         "MarginR, MarginV, Encoding",
         f"Style: Cap,{cc['font']},{cc['size']},{cc['color']},&H000000FF,&H00000000,&H64000000,"
         f"-1,0,0,0,100,100,0,0,1,{cc['outline']},2,5,90,160,0,1",
-        f"Style: Hook,{cc['font']},{hc['size']},&H00000000,&H000000FF,&H00FFFFFF,&H00FFFFFF,"
+        f"Style: Hook,{cc['font']},{hc['size']},&H00000000,&H000000FF,{hc['box']},{hc['box']},"
         f"-1,0,0,0,100,100,0,0,3,18,0,5,90,90,0,1",
         "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
@@ -185,6 +187,17 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
     return "\n".join(lines) + "\n"
 
 
+def music_ratio(jd: Path, start: float, end: float, threshold: float) -> float | None:
+    """Share of seconds in the clip where YAMNet hears music (Content ID risk)."""
+    import numpy as np
+
+    tags = jd / "audio_tags.npz"
+    if not tags.exists():
+        return None
+    music = np.load(tags)["music"][int(start):int(end) + 1]
+    return round(float((music >= threshold).mean()), 2) if len(music) else None
+
+
 def render(cfg: dict, job_id: str) -> list[Path]:
     rc = cfg["render"]
     jd = job_dir(cfg, job_id)
@@ -198,7 +211,12 @@ def render(cfg: dict, job_id: str) -> list[Path]:
     fonts = path_of(cfg, "fonts")
 
     outputs = []
+    mc = cfg["music"]
     for clip in clips:
+        clip["music"] = music_ratio(jd, clip["start"], clip["end"], mc["threshold"])
+        if clip["music"] is not None and clip["music"] > mc["max_ratio"]:
+            log(f"skipping {clip['id']}: music in {clip['music']:.0%} of the clip (Content ID risk)")
+            continue
         cdir = jd / "clips" / clip["id"]
         cdir.mkdir(parents=True, exist_ok=True)
         out = cdir / "short.mp4"

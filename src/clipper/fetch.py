@@ -1,5 +1,6 @@
 """Step 1: bring a VOD into a new job directory (download via yt-dlp or link a local file)."""
 
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -9,14 +10,25 @@ from .common import find_source, log, path_of, run, source_video, tool, write_js
 
 def ytdlp(cfg: dict) -> list[str]:
     # YouTube extraction needs a JS runtime; system node is too old, bun works.
-    return [tool("yt-dlp"), "--no-playlist", "--js-runtimes", f"bun:{tool('bun')}"]
+    # Retries + a rate cap: unthrottled ~100 MB/s bursts got cut off mid-download by YouTube (overnight 2026-10-21).
+    return [tool("yt-dlp"), "--no-playlist", "--js-runtimes", f"bun:{tool('bun')}",
+            "--retries", "10", "--fragment-retries", "10", "--retry-sleep", "exp=2:60",
+            "--limit-rate", cfg["fetch"]["rate_limit"]]
 
 
 def download(cfg: dict, jd: Path, url: str) -> None:
     """Native DASH download of the full VOD (~100 MB/s here); far faster than yt-dlp's ffmpeg-based section mode."""
     h = cfg["fetch"]["max_height"]
     chat = None
-    if cfg["fetch"]["chat"]:
+    twitch = re.search(r"twitch\.tv/videos/(\d+)", url)
+    if cfg["fetch"]["chat"] and twitch:
+        # yt-dlp dropped Twitch rechat in 2026; TwitchDownloaderCLI fetches the chat replay with offsets.
+        chat = subprocess.Popen(
+            [tool("TwitchDownloaderCLI"), "chatdownload", "--id", twitch.group(1), "-o", str(jd / "twitch_chat.json"),
+             "--compression", "None", "--banner", "false"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    elif cfg["fetch"]["chat"]:
         # Live chat replay (YouTube only) downloads in parallel; it can be slow for long streams, so it is optional.
         chat = subprocess.Popen(
             ytdlp(cfg) + ["--skip-download", "--write-subs", "--sub-langs", "live_chat",
@@ -33,7 +45,7 @@ def download(cfg: dict, jd: Path, url: str) -> None:
             chat.wait(timeout=cfg["fetch"]["chat_timeout"])
         except subprocess.TimeoutExpired:
             chat.kill()
-            for p in jd.glob("*.live_chat.json*"):
+            for p in list(jd.glob("*.live_chat.json*")) + list(jd.glob("twitch_chat.json")):
                 p.unlink()
             log("live chat download timed out, continuing without chat")
 

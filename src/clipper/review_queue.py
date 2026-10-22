@@ -36,6 +36,7 @@ def add(cfg: dict, clip: dict, source: dict, file: Path) -> None:
         "tiktok": social,
         "instagram": "\n\n".join(x for x in [social, source.get("credit", "")] if x),
         "score": clip["score"],
+        "music": clip.get("music"),
         "reason": clip["reason"],
         "duration": round(clip["end"] - clip["start"], 1),
         "status": "pending",
