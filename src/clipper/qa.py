@@ -81,9 +81,9 @@ def check_segment_ends(audio_fn, source_ends: list[tuple[float, float]]) -> list
     """
     bad = []
     for src_t, out_t in source_ends:
-        a = audio_fn(src_t - 0.03, 0.03)
+        a = audio_fn(src_t - 0.06, 0.06)
         db = 20 * np.log10(np.sqrt(np.mean(a ** 2)) + 1e-9) if len(a) else -99
-        if db > END_SILENCE_DB:
+        if db > -35.0:
             bad.append(f"audio: segment ending at {out_t:.2f}s (source {src_t:.2f}) is cut during sound ({db:.0f} dB)")
     return bad
 

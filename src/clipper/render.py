@@ -651,10 +651,21 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
             runs = silence_runs(audio_fn, e1 - 0.02, e1 + 0.8)
             if runs:
                 e1 = runs[0][0] + 0.03
+        # The end must sit in real quiet (60 ms below -46 dB), not in a word's decaying tail.
+        if level_db(audio_fn, e1 - 0.06, 0.06) > END_QUIET_DB:
+            stop = e1 + 0.6  # first real quiet wins; the aligner can put the next word inside this tail
+            t_ = e1
+            while t_ < stop:
+                t_ += 0.01
+                # 50 ms centered on the cut at <= -46 dB: a stop-consonant closure inside a word only dips to about -43
+                if level_db(audio_fn, t_ - 0.025, 0.05) <= END_QUIET_DB:
+                    e1 = t_
+                    break
     return round(s0, 3), round(e1, 3)
 
 
 EDGE_CUT = 0.25     # s; camera cuts this close to a segment edge become the edge
+END_QUIET_DB = -46.0  # last 60 ms of a clip end must be at most this loud
 SILENCE_DB = -35.0   # 20 ms RMS below this counts as silence for word-timing refinement
 
 
