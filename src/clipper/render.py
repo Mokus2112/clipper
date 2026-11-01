@@ -988,7 +988,9 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         fps = info["fps"]
         r = round(fps / rc["fps"]) if rc["fps"] and abs(fps / rc["fps"] - round(fps / rc["fps"])) < 0.01 else 1
         n_main, cuts_f = nframes[-1], []
-        for ga, gb in silence_runs(audio_fn, ms_, me_, min_len=GAP_MAX):
+        # clip["cut_gaps"]: [start, end] source ranges of sound that is not speech (breath, noise), cut like silence.
+        wgaps = [tuple(g) for g in clip.get("cut_gaps", [])]
+        for ga, gb in sorted(wgaps + silence_runs(audio_fn, ms_, me_, min_len=GAP_MAX)):
             if ga - ms_ < 0.25 or me_ - gb < 0.25:
                 continue
             f0 = -(-int((ga + GAP_KEEP - ms_) * fps) // r) * r

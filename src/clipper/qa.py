@@ -238,6 +238,8 @@ def check_caption_words(video: Path, ass: Path) -> list[str]:
     heard = [(norm(w.word), w.start) for s in segs for w in (s.words or [])]
     missing = []
     for s0, _e, w in _highlights(ass):
+        if "-" in w:  # whisper hears 'ex-wife' as 'ex', 'wife': check the longest part
+            w = max(w.split("-"), key=len)
         n = norm(w)
         if len(n) < 4 or n in FILLERS or "*" in w:
             continue
