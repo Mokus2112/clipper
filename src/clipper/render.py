@@ -509,11 +509,28 @@ def censor(word: str) -> str:
     return _PROFANITY.sub(mask, word)
 
 
-def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]], layout: str) -> str:
-    """ASS captions for the output timeline; segments map source ranges to output offsets (cold open + main)."""
+def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]], layout: str,
+              shot_spans: list[tuple[float, float, str]] | None = None) -> str:
+    """ASS captions for the output timeline; segments map source ranges to output offsets (cold open + main).
+
+    shot_spans (output start, end, kind) switch the caption position per camera shot in the
+    shots layout: lower on close-ups (off the face), at the seam on stacked duo shots. A caption
+    line that crosses a cut is split there so each part sits at its shot's position.
+    """
     cc, hc, rc = cfg["captions"], cfg["hook"], cfg["render"]
     W, H = rc["width"], rc["height"]
     y = cc[f"y_{layout}"]
+    shot_y = {"face": cc.get("y_shots_face", y), "duo": cc.get("y_shots_duo", y), "fit": cc.get("y_fit", y)}
+
+    def placed(t0: float, t1: float) -> list[tuple[float, float, int]]:
+        if not shot_spans:
+            return [(t0, t1, y)]
+        parts = []
+        for a, b, kind in shot_spans:
+            lo, hi = max(t0, a), min(t1, b)
+            if hi - lo > 0.005:
+                parts.append((lo, hi, shot_y.get(kind, y)))
+        return parts or [(t0, t1, y)]
 
     lines = [
         "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}", "WrapStyle: 0", "",
@@ -548,10 +565,11 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
                     continue
                 parts = [f"{{\\c{cc['highlight']}}}{t}{{\\c{cc['color']}}}" if j == i else t
                          for j, t in enumerate(texts)]
-                lines.append(
-                    f"Dialogue: 0,{ass_time(t0 - seg_s + off)},{ass_time(t1 - seg_s + off)},Cap,,0,0,0,,"
-                    f"{{\\pos({W // 2},{y})}}{pop_tag}{' '.join(parts)}"
-                )
+                for a, b, yy in placed(t0 - seg_s + off, t1 - seg_s + off):
+                    lines.append(
+                        f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Cap,,0,0,0,,"
+                        f"{{\\pos({W // 2},{yy})}}{pop_tag}{' '.join(parts)}"
+                    )
     return "\n".join(lines) + "\n"
 
 
@@ -632,7 +650,18 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         layout, cx, cam, track = pick_layout(cfg, source, video, info, main[0], main[1])
         if track:
             log(f"  tracking: {len(track)} face samples")
-        (cdir / "captions.ass").write_text(build_ass(cfg, clip, segments, layout))
+        seg_shots, shot_spans = [], None
+        if layout == "shots":
+            shot_spans = []
+            for s_, e_, off_ in segments:
+                plan = plan_shots(video, info, s_, e_)
+                seg_shots.append(plan)
+                for sh in plan:
+                    # Output times from the frame-exact source boundaries.
+                    a = off_ + sh["f0"] / info["fps"]
+                    b = off_ + (sh["f1"] / info["fps"] if sh["f1"] is not None else e_ - s_)
+                    shot_spans.append((a, b, sh["kind"]))
+        (cdir / "captions.ass").write_text(build_ass(cfg, clip, segments, layout, shot_spans))
 
         inputs, graph, concat = [], [], ""
         for i, (s, e, _) in enumerate(segments):
@@ -641,7 +670,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             inputs += ["-ss", f"{s:.6f}", "-t", f"{(nframes[i] - 0.5) / fps:.6f}", "-i", video.resolve()]
             if layout == "shots":
                 # One static layout per camera shot; trim on a single input keeps every frame exactly once.
-                shots = plan_shots(video, info, s, e)
+                shots = seg_shots[i]
                 log(f"  segment {i}: " + ", ".join(f"{x['t0']:.2f}-{x['t1']:.2f} {x['kind']}" for x in shots))
                 k = len(shots)
                 graph.append(f"[{i}:v]setpts=PTS-STARTPTS,split={k}" + "".join(f"[s{i}_{j}]" for j in range(k)))

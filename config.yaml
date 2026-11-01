@@ -57,8 +57,8 @@ render:
   fit_zoom: 1.3           # fit layout: enlarge the centred frame and trim the sides a bit
   split_top_ratio: 0.365  # split layout: facecam 1080x700 on top
   track_face: true        # center layout: follow the face with EMA-smoothed crop instead of a static median
-  push_in_rate: 0.02      # shots layout: slow push-in per shot, zoom 1.0 + 0.02/s ...
-  push_in_max: 1.12       # ... capped here, restarts at every camera cut
+  push_in_rate: 0.04      # shots layout: push-in per shot, zoom 1.0 + 0.04/s (Badi: 0.02 was invisible) ...
+  push_in_max: 1.20       # ... capped here, restarts at every camera cut
   track_alpha: 0.15       # EMA smoothing (lower = slower pan, less jitter)
 
 captions:
@@ -72,7 +72,9 @@ captions:
   highlight: "&H0000E0FF"  # ASS BGR: brand yellow #FFE000
   y_center: 1260           # caption baseline in center layout (keeps clear of Shorts UI)
   y_split: 820             # caption position in split layout (just under the seam)
-  y_shots: 1000            # per-shot layout: just under the seam of the stacked duo panels
+  y_shots: 1000            # shots layout fallback
+  y_shots_duo: 1000        # shots layout, stacked duo: just under the seam
+  y_shots_face: 1380       # shots layout, close-up: below the face, above the Shorts UI
   y_fit: 1420              # fit layout: below the centred frame, still above the platforms' caption area
   pop: 1.0                 # 1.0 = no scale pop (Badi 2026-11-01: 1.12 looked jittery); word highlight colour stays
 
