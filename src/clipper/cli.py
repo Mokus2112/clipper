@@ -30,6 +30,8 @@ def main() -> None:
     s = sub.add_parser("upload", help="upload approved clips (respects daily_limit)")
     s.add_argument("--limit", type=int)
     sub.add_parser("auth", help="run the YouTube OAuth flow and store the token")
+    for name, h in (("publish", "make uploaded clips public"), ("unpublish", "make uploaded clips private")):
+        sub.add_parser(name, help=h).add_argument("clip_ids", nargs="+")
     s = sub.add_parser("notify", help="send pending clips to Telegram for review")
     s.add_argument("clip_ids", nargs="*")
     s = sub.add_parser("cleanup", help="delete source VODs, keep transcripts and rendered clips")
@@ -93,13 +95,10 @@ def main() -> None:
             print(f"{cid}: {status}")
         # Refresh keyboard after approve/reject so Badi always sees the current pending list.
         if cfg.get("telegram", {}).get("notify"):
-            from .notify import send, telegram_env, review_keyboard
-            import json as _json
+            from .notify import send, telegram_env, current_keyboard
             token, chat_id = telegram_env(cfg)
-            remaining = [i["id"] for i in review_queue.load(cfg) if i["status"] == "pending"]
-            keyboard_json = review_keyboard(remaining) if remaining else _json.dumps({"remove_keyboard": True})
             send(token, ["-d", f"chat_id={chat_id}", "-d", "text=OK.",
-                         "-d", f"reply_markup={keyboard_json}"], "sendMessage")
+                         "--data-urlencode", f"reply_markup={current_keyboard(cfg)}"], "sendMessage")
     elif a.cmd == "upload":
         from .upload import upload
         upload(cfg, a.limit)
@@ -130,9 +129,14 @@ def main() -> None:
         for name, r in results.items():
             print(f"{name}: {r['status']}")
     elif a.cmd == "auth":
-        from .upload import credentials
-        credentials(cfg)
+        from .upload import credentials, SCOPE_MANAGE
+        credentials(cfg, need=SCOPE_MANAGE)  # re-consents if the token lacks a scope
         print("token stored")
+    elif a.cmd in ("publish", "unpublish"):
+        from .upload import set_privacy
+        target = "public" if a.cmd == "publish" else "private"
+        for cid in a.clip_ids:
+            print(f"{cid}: {set_privacy(cfg, cid, target)}")
 
 
 if __name__ == "__main__":

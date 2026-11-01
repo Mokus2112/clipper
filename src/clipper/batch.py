@@ -79,7 +79,7 @@ def run_batch(cfg: dict, source_names: list[str], notify: bool = True) -> dict:
 
 
 def _send_summary(cfg: dict, sources: list[str], results: dict) -> None:
-    from .notify import send, telegram_env, review_keyboard
+    from .notify import send, telegram_env, current_keyboard
     token, chat_id = telegram_env(cfg)
     lines = [f"Overnight batch ({datetime.now().strftime('%Y-%m-%d')})"]
     for name in sources:
@@ -95,9 +95,9 @@ def _send_summary(cfg: dict, sources: list[str], results: dict) -> None:
         else:
             lines.append(f"  {name}: hiba -- {r.get('reason','')}")
     pending = [i["id"] for i in review_queue.load(cfg) if i["status"] == "pending"]
-    keyboard_json = review_keyboard(pending) if pending else None
+    keyboard_json = current_keyboard(cfg) if pending else None
     import json
     args = ["-d", f"chat_id={chat_id}", "-d", f"text={chr(10).join(lines)}"]
     if keyboard_json:
-        args += ["-d", f"reply_markup={keyboard_json}"]
+        args += ["--data-urlencode", f"reply_markup={keyboard_json}"]
     send(token, args, "sendMessage")

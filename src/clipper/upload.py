@@ -6,17 +6,29 @@ from pathlib import Path
 from .common import log, path_of
 from . import review_queue
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+SCOPE_UPLOAD = "https://www.googleapis.com/auth/youtube.upload"
+SCOPE_MANAGE = "https://www.googleapis.com/auth/youtube"  # videos.list/update (publish, unpublish)
+SCOPES = [SCOPE_UPLOAD, SCOPE_MANAGE]
 
 
-def credentials(cfg: dict):
+def credentials(cfg: dict, need: str = SCOPE_UPLOAD, interactive: bool = True):
+    """OAuth credentials that include the `need` scope.
+
+    The stored token keeps the scopes it was granted (an old upload-only token still uploads).
+    If `need` is missing, `interactive` runs the consent flow for all SCOPES, otherwise it exits
+    with a hint to run `clipper auth`.
+    """
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
 
     secrets = path_of(cfg, "secrets")
     token = secrets / "token.json"
-    creds = Credentials.from_authorized_user_file(str(token), SCOPES) if token.exists() else None
+    creds = Credentials.from_authorized_user_file(str(token)) if token.exists() else None
+    if creds and need not in (creds.scopes or []):
+        if not interactive:
+            raise SystemExit(f"token has no {need} scope: run `uv run clipper auth` to re-consent")
+        creds = None
     if creds and creds.expired and creds.refresh_token:
         creds.refresh(Request())
     if not creds or not creds.valid:
@@ -71,3 +83,36 @@ def upload(cfg: dict, limit: int | None = None) -> list[str]:
             from .notify import send_upload_result
             send_upload_result(cfg, item["id"], resp["id"], privacy)
     return done
+
+
+def set_privacy(cfg: dict, clip_id: str, privacy: str) -> str:
+    """Change an uploaded clip's privacy (publish = public, unpublish = private).
+
+    Returns the privacy YouTube reports back after the update.
+    """
+    from googleapiclient.discovery import build
+
+    item = next((i for i in review_queue.load(cfg) if i["id"] == clip_id), None)
+    if not item:
+        raise SystemExit(f"unknown clip: {clip_id}")
+    if not item.get("video_id"):
+        raise SystemExit(f"{clip_id} is not uploaded yet (status: {item['status']})")
+    yt = build("youtube", "v3", credentials=credentials(cfg, need=SCOPE_MANAGE, interactive=False))
+    found = yt.videos().list(part="status", id=item["video_id"]).execute().get("items", [])
+    if not found:
+        raise SystemExit(f"video {item['video_id']} not found on the channel")
+    # Send back the full current status so update does not reset other fields (license, embeddable...).
+    status = found[0]["status"]
+    status["privacyStatus"] = privacy
+    status.pop("publishAt", None)  # a scheduled publish time is only valid while private
+    resp = yt.videos().update(part="status", body={"id": item["video_id"], "status": status}).execute()
+    actual = (resp.get("status") or {}).get("privacyStatus", f"unknown, requested {privacy}")
+    extra = {"privacy": actual}
+    if actual == "public":
+        extra["published_at"] = datetime.now().isoformat(timespec="seconds")
+    review_queue.set_status(cfg, clip_id, item["status"], **extra)
+    log(f"{clip_id}: privacy -> {actual} (requested {privacy}) https://youtube.com/shorts/{item['video_id']}")
+    if cfg.get("telegram", {}).get("notify"):
+        from .notify import send_privacy_result
+        send_privacy_result(cfg, clip_id, item["video_id"], actual)
+    return actual
