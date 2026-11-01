@@ -38,6 +38,8 @@ def main() -> None:
     s.add_argument("sources", nargs="*", help="source names (default: all sources with 'practice' in name)")
     s.add_argument("--no-notify", action="store_true")
     sub.add_parser("overnight", help="alias for batch with all practice sources")
+    s = sub.add_parser("memes", help="meme library commands")
+    s.add_argument("subcmd", choices=["refresh", "show"], help="refresh: rebuild library; show: print scores")
 
     a = p.parse_args()
     cfg = load_config()
@@ -106,6 +108,14 @@ def main() -> None:
         jobs = a.jobs or [d.name for d in (path_of(cfg, "data") / "jobs").iterdir() if d.is_dir()]
         freed = sum(remove_source(job_dir(cfg, j)) for j in jobs)
         print(f"freed {freed / 1e9:.2f} GB from {len(jobs)} jobs")
+    elif a.cmd == "memes":
+        from .memes import refresh, load_library
+        import json as _json
+        if a.subcmd == "refresh":
+            lib = refresh(cfg)
+            print(f"updated: {lib['updated']}, scores: {lib.get('scores', {})}")
+        else:
+            print(_json.dumps(load_library(cfg), indent=2))
     elif a.cmd in ("batch", "overnight"):
         from .batch import run_batch
         names = (a.sources if a.cmd == "batch" and a.sources

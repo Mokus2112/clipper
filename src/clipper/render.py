@@ -238,7 +238,16 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             concat += f"[l{i}][{i}:a:0]"
         audio = ",loudnorm=I=-14:TP=-1.5:LRA=11" if rc["loudnorm"] else ""
         graph.append(f"{concat}concat=n={len(segments)}:v=1:a=1[cv][ca0]")
-        graph.append(f"[cv]subtitles=captions.ass:fontsdir={fonts}[v]")
+        from .memes import pick_effects, meme_filter_chain
+        meme_fx = pick_effects(cfg, clip)
+        W, H = rc["width"], rc["height"]
+        if meme_fx:
+            graph.append(meme_filter_chain(meme_fx, "cv", "cv_fx", W, H))
+            cap_in = "cv_fx"
+            log(f"  meme effects: {meme_fx}")
+        else:
+            cap_in = "cv"
+        graph.append(f"[{cap_in}]subtitles=captions.ass:fontsdir={fonts}[v]")
         graph.append(f"[ca0]anull{audio}[a]")
         cmd = [
             tool("ffmpeg"), "-v", "error", "-y", *inputs, "-filter_complex", ";".join(graph),
