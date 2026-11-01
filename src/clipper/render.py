@@ -565,6 +565,24 @@ def music_ratio(jd: Path, start: float, end: float, threshold: float) -> float |
     return round(float((music >= threshold).mean()), 2) if len(music) else None
 
 
+def check_output(path: Path) -> None:
+    """Fail loudly on broken audio timing: every AAC packet but the last must be 1024 samples,
+    and audio and video lengths must agree within 60 ms."""
+    import json as _json
+    res = subprocess.run([tool("ffprobe"), "-v", "error", "-select_streams", "a:0", "-show_entries",
+                          "packet=duration", "-of", "csv=p=0", str(path)], capture_output=True, text=True, check=True)
+    durs = [int(x) for x in res.stdout.split() if x.strip().isdigit()]
+    bad = [i for i, d in enumerate(durs[:-1]) if d != 1024]
+    st = _json.loads(subprocess.run([tool("ffprobe"), "-v", "error", "-show_entries", "stream=codec_type,duration",
+                                     "-of", "json", str(path)], capture_output=True, text=True, check=True).stdout)
+    lens = {x["codec_type"]: float(x["duration"]) for x in st["streams"]}
+    gap = abs(lens.get("audio", 0) - lens.get("video", 0))
+    if bad or not durs or gap > 0.06:
+        raise RuntimeError(f"RENDER CHECK FAILED {path}: {len(bad)} audio packets != 1024 samples "
+                           f"(first at #{bad[:5]}), audio {lens.get('audio')} s vs video {lens.get('video')} s")
+    log(f"  check ok: {len(durs)} audio packets x 1024, audio/video diff {gap * 1000:.0f} ms")
+
+
 def render(cfg: dict, job_id: str) -> list[Path]:
     rc = cfg["render"]
     jd = job_dir(cfg, job_id)
@@ -661,7 +679,10 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         else:
             cap_in = "cv"
         graph.append(f"[{cap_in}]subtitles=captions.ass:fontsdir={fonts}[v]")
-        graph.append(f"[ca0]anull{audio}[a]")
+        # Concat leaves gaps/overlaps in the audio timestamps (1-sample packets, one 2.36 s packet):
+        # timestamp-driven players (YouTube, Telegram, Safari) then garble the start. Rebuild
+        # continuous timestamps from the sample count.
+        graph.append(f"[ca0]anull{audio},aresample=48000,asetpts=N/SR/TB[a]")
         cmd = [
             tool("ffmpeg"), "-v", "error", "-y", *inputs, "-filter_complex", ";".join(graph),
             "-map", "[v]", "-map", "[a]",
@@ -669,6 +690,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
         ]
         run(cmd + ["-movflags", "+faststart", out.name], cwd=cdir)
+        check_output(out)
         # Preview frame for the review step (taken after the hook disappears).
         run([tool("ffmpeg"), "-v", "error", "-y", "-ss", min(3.0, (clip["end"] - clip["start"]) / 2),
              "-i", out.name, "-frames:v", "1", "-q:v", "3", "preview.jpg"], cwd=cdir)
