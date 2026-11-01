@@ -34,6 +34,10 @@ def main() -> None:
     s.add_argument("clip_ids", nargs="*")
     s = sub.add_parser("cleanup", help="delete source VODs, keep transcripts and rendered clips")
     s.add_argument("jobs", nargs="*", help="job ids (default: all jobs)")
+    s = sub.add_parser("batch", help="run full pipeline for multiple sources (overnight practice)")
+    s.add_argument("sources", nargs="*", help="source names (default: all sources with 'practice' in name)")
+    s.add_argument("--no-notify", action="store_true")
+    sub.add_parser("overnight", help="alias for batch with all practice sources")
 
     a = p.parse_args()
     cfg = load_config()
@@ -102,6 +106,14 @@ def main() -> None:
         jobs = a.jobs or [d.name for d in (path_of(cfg, "data") / "jobs").iterdir() if d.is_dir()]
         freed = sum(remove_source(job_dir(cfg, j)) for j in jobs)
         print(f"freed {freed / 1e9:.2f} GB from {len(jobs)} jobs")
+    elif a.cmd in ("batch", "overnight"):
+        from .batch import run_batch
+        names = (a.sources if a.cmd == "batch" and a.sources
+                 else [s["name"] for s in cfg.get("sources", []) if "practice" in s["name"]])
+        notify_flag = not getattr(a, "no_notify", False)
+        results = run_batch(cfg, names, notify=notify_flag)
+        for name, r in results.items():
+            print(f"{name}: {r['status']}")
     elif a.cmd == "auth":
         from .upload import credentials
         credentials(cfg)
