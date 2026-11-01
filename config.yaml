@@ -154,11 +154,15 @@ sources:
     tags: [lacy, stream, clips]
     credit: "Credit: Lacy (https://www.youtube.com/@LacyHimself)"
     title_mention: Lacy
+    hook_mention: Lacy      # campaign: caption/text overlay must mention Lacy
     required_text: "#Lacy"
     rank_notes: >-
       Reach campaign rules: Lacy must be the primary focus of the whole clip (not just the intro).
       Never portray Lacy in a negative light, no negative or false narrative, no drama/hate farming.
       English-speaking audience (US/UK/CA/AU/NZ). Prefer funny moments, memorable quotes and reactions.
+      The hook text MUST contain the name "Lacy". Avoid moments where Japanese speech or Japanese
+      signs/screen text carry the moment (no Japanese text may appear in captions or descriptions).
+      Avoid moments dominated by brand logos or stream overlay graphics.
 
   # Scapeworld Entertainment, $1.50 CPM, max $150/clip, TikTok + YouTube Shorts only.
   # Every approved example starts with an "Ad:" disclosure. Source: Scape gameplay streams

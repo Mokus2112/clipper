@@ -71,6 +71,13 @@ def format_transcript(segments: list[dict], spikes: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _hook_with_mention(hook: str, name: str) -> str:
+    """Campaigns that require the creator's name in the on-screen text get it in the hook."""
+    if name and name.lower() not in hook.lower():
+        return f"{name}: {hook}"
+    return hook
+
+
 def extract_json(text: str) -> list:
     m = re.search(r"\[.*\]", text, re.S)
     if not m:
@@ -157,7 +164,7 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
             "payoff_start": round(ps, 2) if ps is not None else None,
             "payoff_end": round(pe, 2) if pe is not None else None,
             "quotes": {k: p.get(k, "") for k in ("start_quote", "end_quote", "payoff_quote")},
-            "hook": p["hook"].strip(),
+            "hook": _hook_with_mention(p["hook"].strip(), source.get("hook_mention", "")),
             "title": p["title"].strip()[:95],
             "story": p.get("story", ""),
             "caption": p.get("caption", p["title"]).strip(),

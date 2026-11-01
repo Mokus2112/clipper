@@ -401,6 +401,14 @@ def chunk_words(words: list[dict], max_words: int, max_sec: float) -> list[list[
 MIN_CAPTION_SEC = 0.25
 
 
+_NON_LATIN = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u0400-\u04ff]")
+
+
+def caption_words(words: list[dict]) -> list[dict]:
+    """Words that may appear in captions: no CJK/Cyrillic text (e.g. Japanese speech in an IRL stream)."""
+    return [w for w in words if not _NON_LATIN.search(w["w"])]
+
+
 def merge_punct(words: list[dict]) -> list[dict]:
     """Glue punctuation-only tokens onto the previous word: '50' '%' -> '50%'."""
     out: list[dict] = []
@@ -606,7 +614,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
             f"{{\\pos({W // 2},{hc['y']})}}{ass_escape(clip['hook'])}"
         )
     for seg_s, seg_e, off in segments:
-        words = [w for w in clip.get("words", []) if w["s"] >= seg_s - 0.05 and w["e"] <= seg_e + 0.05]
+        words = [w for w in caption_words(clip.get("words", [])) if w["s"] >= seg_s - 0.05 and w["e"] <= seg_e + 0.05]
         for chunk in chunk_words(words, cc["max_words"], cc["max_chunk_sec"]):
             texts = [ass_escape(censor(w["w"].upper() if cc["uppercase"] else w["w"])) for w in chunk]
             pop = cc.get("pop", 1.0)
