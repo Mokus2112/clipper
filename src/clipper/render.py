@@ -298,7 +298,7 @@ DUO_MIN_SRC_H = 600  # px of source height per duo panel; below this the ~2x ups
 
 
 def duo_panel(box: tuple, info: dict, aspect: float, min_h: float = 0,
-              span: tuple[float, float] | None = None) -> tuple[int, int, int, int]:
+              span: tuple[float, float] | None = None, bottom: bool = False) -> tuple[int, int, int, int]:
     """Source crop (w, h, x, y) around one person for a W x H/2 panel, face slightly below centre.
 
     span: (min, max) face centre x over the shot; the crop is widened so the face stays inside
@@ -311,8 +311,9 @@ def duo_panel(box: tuple, info: dict, aspect: float, min_h: float = 0,
     w = min(h * aspect, sw)
     h = w / aspect
     mid = (span[0] + span[1]) / 2 if span else fx + fw / 2
-    # Face a bit below the panel centre: leaves head room for the hook box on the top panel.
-    cx, cy = mid * sw, (fy + fh / 2) * sh - h * 0.08
+    # Top panel: face a bit below the panel centre (room for the hook, clear of the top UI).
+    # Bottom panel: face in the upper third so it stays above the Shorts bottom UI (> ~1570 px).
+    cx, cy = mid * sw, (fy + fh / 2) * sh + (h * 0.17 if bottom else -h * 0.08)
     x = min(max(cx - w / 2, 0), sw - w)
     y = min(max(cy - h / 2, 0), sh - h)
     return even(w), even(h), even(x), even(y)
@@ -325,7 +326,7 @@ def duo_panels(shot: dict, info: dict, aspect: float) -> tuple | None:
     upscaling); if the two widened crops would overlap, the duo layout is not usable.
     """
     l = duo_panel(shot["left"], info, aspect, DUO_MIN_SRC_H, shot.get("left_span"))
-    r = duo_panel(shot["right"], info, aspect, DUO_MIN_SRC_H, shot.get("right_span"))
+    r = duo_panel(shot["right"], info, aspect, DUO_MIN_SRC_H, shot.get("right_span"), bottom=True)
     if min(l[1], r[1]) < DUO_MIN_SRC_H or l[2] + l[0] > r[2]:
         return None
     return l, r
@@ -384,7 +385,31 @@ def chunk_words(words: list[dict], max_words: int, max_sec: float) -> list[list[
         cur.append(w)
     if cur:
         chunks.append(cur)
-    return chunks
+    # A chunk on screen for less than MIN_CAPTION_SEC only flashes: merge it into a neighbour.
+    merged: list[list[dict]] = []
+    for ch in chunks:
+        if merged and ch[-1]["e"] - ch[0]["s"] < MIN_CAPTION_SEC and ch[0]["s"] - merged[-1][-1]["e"] <= 0.6:
+            merged[-1] = merged[-1] + ch
+        elif merged and merged[-1][-1]["e"] - merged[-1][0]["s"] < MIN_CAPTION_SEC \
+                and ch[0]["s"] - merged[-1][-1]["e"] <= 0.6:
+            merged[-1] = merged[-1] + ch
+        else:
+            merged.append(ch)
+    return merged
+
+
+MIN_CAPTION_SEC = 0.25
+
+
+def merge_punct(words: list[dict]) -> list[dict]:
+    """Glue punctuation-only tokens onto the previous word: '50' '%' -> '50%'."""
+    out: list[dict] = []
+    for w in words:
+        if out and re.fullmatch(r"[^\w]+", w["w"]):
+            out[-1] = {**out[-1], "w": out[-1]["w"] + w["w"], "e": max(out[-1]["e"], w["e"])}
+        else:
+            out.append(dict(w))
+    return out
 
 
 _PROFANITY = re.compile(r"(?i)\b(motherf|f)u(ck\w*)|(?<![a-z])((?:bull)?sh)i(t\w*)|\b(b)i(tch\w*)|\b(c)u(nt\w*)")
@@ -449,6 +474,11 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
     s0 = first["s"] - SNAP_PRE
     if i0 > 0:
         s0 = max(s0, words[i0 - 1]["e"])
+        # Whisper's previous-word end is often early: cut at the quietest point just before the
+        # first word so the segment does not open with the previous word's tail.
+        q = quietest(audio_fn, max(words[i0 - 1]["s"] + 0.05, first["s"] - 0.25), first["s"])
+        if q is not None:
+            s0 = q
     e1 = last["e"] + SNAP_POST
     nxt = words[i1 + 1] if i1 + 1 < len(words) else None
     if nxt:
@@ -650,7 +680,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         out = cdir / "short.mp4"
         from .transcribe import load_audio
         audio_fn = lambda t0, d: load_audio(video, t0, d)  # noqa: E731
-        raw_words = clip.get("words", [])
+        raw_words = merge_punct(clip.get("words", []))
         words = raw_words
         if words:
             words = refine_words(words, audio_fn, min(w["s"] for w in words) - 0.5, max(w["e"] for w in words) + 0.5)

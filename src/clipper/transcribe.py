@@ -71,7 +71,10 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
         ps = clip.get("payoff_start")
         lo = max(0.0, min(clip["start"], ps if ps is not None else clip["start"]) - 5)
         hi = max(clip["end"], clip.get("payoff_end") or clip["end"]) + 5
+        # The prompt nudges Whisper to keep spoken fillers ("like", "you know", "it's") verbatim;
+        # captions that skip words people can hear look machine-made.
         segments, _ = m.transcribe(load_audio(video, lo, hi - lo), word_timestamps=True, vad_filter=True,
+                                   initial_prompt="Um, so, like, you know, I mean, it's, uh, yeah. Verbatim.",
                                    language=language)
         words = [
             {"w": w.word.strip(), "s": round(lo + w.start, 2), "e": round(lo + w.end, 2)}
@@ -107,6 +110,11 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
                                 i0 = j + 1
                                 break
                     clip["payoff_start"], clip["payoff_end"] = words[i0]["s"], words[i1]["e"]
+                    # Strong profanity in the first seconds risks limited ads: no cold open then.
+                    from .render import _PROFANITY
+                    if any(_PROFANITY.search(w["w"]) for w in words[i0:i1 + 1]):
+                        log(f"{clip['id']}: payoff has strong profanity, no cold open")
+                        clip["payoff_start"] = clip["payoff_end"] = None
             log(f"{clip['id']}: quotes start={'ok' if qs else 'MISS'} end={'ok' if qe else 'MISS'}")
             log(f"{clip['id']}: {len(words)} words, {clip['end'] - clip['start']:.1f}s")
             continue

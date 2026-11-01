@@ -29,6 +29,7 @@ Hard rules:
 - end_quote: the last 5-8 words of the clip, copied EXACTLY from the transcript, ending a sentence.
 - payoff_quote: the payoff as a short complete phrase or sentence (3-10 words), copied EXACTLY from the
   transcript, inside the clip. It must be understandable as the first thing a viewer hears.
+  No strong profanity (f-word, s-word...) in the payoff_quote: it plays in the first seconds.
   The quotes decide the cut; the numbers are only a hint. A clip whose quotes are not in the transcript is dropped.
 - hook: on-screen text, 3-7 words, shown over the cold open. It must create tension or a question that only
   watching the clip answers. Good: "He bet his car on this", "Chat lied to him", "She was not ready for this",
