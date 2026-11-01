@@ -57,6 +57,36 @@ def add(cfg: dict, clip: dict, source: dict, file: Path) -> None:
         "created": datetime.now().isoformat(timespec="seconds"),
     })
     save(cfg, items)
+    write_posts(items[-1], source)
+
+
+PLATFORM_NAMES = {"youtube": "YouTube Shorts", "tiktok": "TikTok", "instagram": "Instagram Reels", "x": "X"}
+
+
+def write_posts(item: dict, source: dict) -> Path:
+    """posts.md next to the clip: copy-paste texts for every platform the campaign allows."""
+    plats = source.get("platforms", ["youtube"])
+    hashtags = " ".join(f"#{t}" for t in item["tags"][:5])
+    required = source.get("required_text", "")
+    credit = source.get("credit", "")
+    lines = [f"# {item['id']}", "",
+             f"Kampany: {source['name']}  |  Engedelyezett platformok: "
+             + ", ".join(PLATFORM_NAMES.get(p, p) for p in plats), ""]
+    if "youtube" in plats:
+        lines += ["## YouTube Shorts", "", "Cim:", "", item["title"], "", "Leiras:", "", item["description"], ""]
+    if "tiktok" in plats:
+        lines += ["## TikTok", "", "Caption:", "", item["tiktok"], ""]
+    if "instagram" in plats:
+        lines += ["## Instagram Reels", "", "Caption:", "", item["instagram"], ""]
+    if "x" in plats:
+        x_text = " ".join(t for t in [item["title"], required, credit] if t)
+        lines += ["## X", "", x_text[:280], ""]
+    lines += ["## Megjegyzes", "",
+              "Kampanyhoz bekuldes: Whop / Content Rewards, a poszt linkjevel"
+              + (" (Reach: 30 percen belul)." if source["name"].startswith("reach") else "."), ""]
+    out = Path(item["file"]).with_name("posts.md")
+    out.write_text("\n".join(lines))
+    return out
 
 
 def set_status(cfg: dict, clip_id: str, status: str, **extra) -> dict:

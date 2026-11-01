@@ -138,7 +138,8 @@ def pick_layout(cfg: dict, source: dict, video: Path, info: dict, start: float,
 
 
 def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam: list[float] | None,
-                  inp: str, out: str, track: list | None = None, seg_start: float = 0.0) -> str:
+                  inp: str, out: str, track: list | None = None, seg_start: float = 0.0,
+                  face_at: float = 0.5) -> str:
     rc = cfg["render"]
     W, H = rc["width"], rc["height"]
     sw, sh = info["width"], info["height"]
@@ -173,7 +174,8 @@ def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam:
         x_expr = _track_crop_expr(smoothed, seg_start)
     else:
         center = (cx if cx is not None else 0.5) * sw
-        x_expr = str(int(min(max(center - cw / 2, 0), sw - cw)))
+        # face_at: where the face lands across the output width (0.5 = middle).
+        x_expr = str(int(min(max(center - cw * face_at, 0), sw - cw)))
     # Quoted: the tracking expression contains commas, which would otherwise split the filter chain.
     return f"[{inp}]crop=w={cw}:h={sh}:x='{x_expr}':y=0,scale={W}:{H},setsar=1[{out}]"
 
@@ -181,7 +183,8 @@ def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam:
 # ---------- per-shot layout ("shots") ----------
 SCENE_CUT_SCORE = 4.0   # scdet score; real camera cuts score ~10, in-shot motion stays below 1
 MIN_SHOT = 0.5          # s, shorter shots are merged into the previous one
-DUO_MIN_SEP = 0.25      # two faces at least this far apart (fraction of width) -> stacked duo layout
+DUO_MIN_SEP = 0.25
+FACE_MIN_W = 0.07       # face crop only for close-ups (face >= 7% of frame width)      # two faces at least this far apart (fraction of width) -> stacked duo layout
 
 
 def scene_cuts(video: Path, start: float, dur: float) -> list[tuple[float, int]]:
@@ -288,7 +291,12 @@ def plan_shots(video: Path, info: dict, start: float, end: float) -> list[dict]:
                     cx = median(side)
                 else:
                     cx = median(centres)
-                shot.update(kind="face", cx=cx)
+                # A small face (wide shot) blown up to 9:16 is visibly soft: show the frame instead.
+                fws = [b[2] for f in with_faces for b in f]
+                if median(fws) < FACE_MIN_W:
+                    shot.update(kind="fit")
+                else:
+                    shot.update(kind="face", cx=cx)
         shots.append(shot)
     cap.release()
     return shots
@@ -332,27 +340,33 @@ def duo_panels(shot: dict, info: dict, aspect: float) -> tuple | None:
     return l, r
 
 
-def push_in(cfg: dict, fps: float) -> str:
+def push_in(cfg: dict, fps: float, anchor: tuple[float, float] | None = None) -> str:
     """Slow push-in from the first frame of a shot: zoom 1.0 + rate*t, capped.
 
     perspective resamples with sub-pixel precision (cubic), so the zoom does not step/jitter
     like crop/zoompan with integer offsets. `in` is the frame count since the shot started.
+    anchor (output px) stays fixed while everything else moves away from it: on close-ups it
+    sits at the top safe line so the forehead is not pushed into the top UI zone.
     """
     rc = cfg["render"]
     rate, cap = rc.get("push_in_rate", 0.0), rc.get("push_in_max", 1.0)
     if rate <= 0 or cap <= 1.0:
         return ""
-    z = f"min(1+{rate}*in/{fps:.5f},{cap})"
-    dx, dy = f"W*(1-1/{z})/2", f"H*(1-1/{z})/2"
-    return (f",perspective=x0='{dx}':y0='{dy}':x1='W-{dx}':y1='{dy}':x2='{dx}':y2='H-{dy}'"
-            f":x3='W-{dx}':y3='H-{dy}':interpolation=cubic:eval=frame")
+    W, H = rc["width"], rc["height"]
+    ax, ay = anchor or (W / 2, H / 2)
+    d = f"(1-1/min(1+{rate}*in/{fps:.5f},{cap}))"
+    x0, x1 = f"{ax:.1f}*{d}", f"W-{W - ax:.1f}*{d}"
+    y0, y2 = f"{ay:.1f}*{d}", f"H-{H - ay:.1f}*{d}"
+    return (f",perspective=x0='{x0}':y0='{y0}':x1='{x1}':y1='{y0}':x2='{x0}':y2='{y2}'"
+            f":x3='{x1}':y3='{y2}':interpolation=cubic:eval=frame")
 
 
 def shot_filter(cfg: dict, info: dict, shot: dict, inp: str, out: str) -> str:
     rc = cfg["render"]
     W, H = rc["width"], rc["height"]
     if shot["kind"] == "face":
-        return layout_filter(cfg, info, "center", shot["cx"], None, inp, out)
+        # Face left of centre: the right ~160 px are platform buttons (safe zone).
+        return layout_filter(cfg, info, "center", shot["cx"], None, inp, out, face_at=FACE_X / W)
     if shot["kind"] == "duo":
         ph = H // 2
         (lw, lh, lx, ly), (rw, rh, rx, ry) = duo_panels(shot, info, W / ph)
@@ -404,16 +418,20 @@ MIN_CAPTION_SEC = 0.25
 _NON_LATIN = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u0400-\u04ff]")
 
 
+_HESITATION = re.compile(r"(?i)^(um+|uh+|uhm+|erm+|hmm+|ah+|eh+)[,.!?]*$")
+
+
 def caption_words(words: list[dict]) -> list[dict]:
-    """Words that may appear in captions: no CJK/Cyrillic text (e.g. Japanese speech in an IRL stream)."""
-    return [w for w in words if not _NON_LATIN.search(w["w"])]
+    """Words that may appear in captions: no CJK/Cyrillic text (e.g. Japanese speech in an IRL stream)
+    and no hesitation sounds (um, uh); real fillers like "like" stay."""
+    return [w for w in words if not _NON_LATIN.search(w["w"]) and not _HESITATION.match(w["w"])]
 
 
 def merge_punct(words: list[dict]) -> list[dict]:
     """Glue punctuation-only tokens onto the previous word: '50' '%' -> '50%'."""
     out: list[dict] = []
     for w in words:
-        if out and re.fullmatch(r"[^\w]+", w["w"]):
+        if out and (re.fullmatch(r"[^\w]+", w["w"]) or w["w"].startswith("-")):
             out[-1] = {**out[-1], "w": out[-1]["w"] + w["w"], "e": max(out[-1]["e"], w["e"])}
         else:
             out.append(dict(w))
@@ -441,6 +459,19 @@ def quietest(audio_fn, t0: float, t1: float, sr: int = 16000) -> float | None:
     rms = [float(np.sqrt(np.mean(a[i:i + win] ** 2))) for i in range(0, len(a) - win + 1, hop)]
     k = min(range(len(rms)), key=rms.__getitem__)
     return t0 + (k * hop + win / 2) / sr
+
+
+def first_silence(audio_fn, t0: float, t1: float, sr: int = 16000) -> float | None:
+    """Start (+30 ms) of the first 20 ms window below SILENCE_DB in [t0, t1], or None."""
+    import numpy as np
+    if audio_fn is None or t1 - t0 < 0.03:
+        return None
+    a = audio_fn(t0, t1 - t0)
+    win, hop = int(0.02 * sr), int(0.005 * sr)
+    for i in range(0, max(len(a) - win, 0) + 1, hop):
+        if 20 * np.log10(np.sqrt(np.mean(a[i:i + win] ** 2)) + 1e-9) < SILENCE_DB:
+            return t0 + i / sr + 0.03
+    return None
 
 
 def snap_to_words(words: list[dict], start: float, end: float, sentence_end: bool = False,
@@ -492,12 +523,17 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
     if nxt:
         e1 = min(e1, nxt["s"] - 0.05)
     limit = last["e"] + 0.3 if nxt is None else min(last["e"] + 0.3, nxt["e"] - 0.1)
-    q = quietest(audio_fn, last["e"], limit)
+    # End at the first silence after the last word (the next sentence can start 100 ms later and
+    # Whisper's next-word start is unreliable); fall back to the quietest point.
+    q = first_silence(audio_fn, last["e"], last["e"] + 0.35)
+    if q is None:
+        q = quietest(audio_fn, last["e"], limit)
     if q is not None:
-        e1 = max(e1, q)
+        e1 = q
     return round(min(s0, first["s"]), 3), round(max(e1, last["e"]), 3)
 
 
+EDGE_CUT = 0.25     # s; camera cuts this close to a segment edge become the edge
 SILENCE_DB = -35.0   # 20 ms RMS below this counts as silence for word-timing refinement
 
 
@@ -571,6 +607,14 @@ def censor(word: str) -> str:
     return _PROFANITY.sub(mask, word)
 
 
+# Strictest safe zone over YouTube Shorts, TikTok and Instagram Reels (1080x1920): keep text and
+# faces out of the top ~220 px, the bottom ~420 px and the right ~160 px (action buttons).
+SAFE_LEFT, SAFE_RIGHT_X = 90, 920
+SAFE_TOP = 220
+FACE_X = 475                              # close-up face centre x (left of the button column)
+CAP_X = (SAFE_LEFT + SAFE_RIGHT_X) // 2   # text centre, shifted left of the frame centre
+
+
 def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]], layout: str,
               shot_spans: list[tuple[float, float, str]] | None = None) -> str:
     """ASS captions for the output timeline; segments map source ranges to output offsets (cold open + main).
@@ -601,18 +645,27 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
         "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
         "MarginR, MarginV, Encoding",
         f"Style: Cap,{cc['font']},{cc['size']},{cc['color']},&H000000FF,&H00000000,&H64000000,"
-        f"-1,0,0,0,100,100,0,0,1,{cc['outline']},2,5,90,160,0,1",
+        f"-1,0,0,0,100,100,0,0,1,{cc['outline']},2,5,{SAFE_LEFT},{W - SAFE_RIGHT_X},0,1",
         f"Style: Hook,{cc['font']},{hc['size']},&H00000000,&H000000FF,{hc['box']},{hc['box']},"
-        f"-1,0,0,0,100,100,0,0,3,18,0,5,90,90,0,1",
+        # Box padding (outline 18) included: the box itself stays inside the safe zone.
+        f"-1,0,0,0,100,100,0,0,3,18,0,5,{SAFE_LEFT + 20},{W - SAFE_RIGHT_X + 20},0,1",
         "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     if hc["enabled"] and clip.get("hook"):
         # The hook stays up through the cold open and the first seconds of the setup.
         cold = segments[0][1] - segments[0][0] if len(segments) > 1 else 0.0
-        lines.append(
-            f"Dialogue: 1,{ass_time(0)},{ass_time(cold + hc['seconds'])},Hook,,0,0,0,,"
-            f"{{\\pos({W // 2},{hc['y']})}}{ass_escape(clip['hook'])}"
-        )
+        # Per shot like the captions: over the chest on close-ups (the top of the frame is the
+        # forehead there), at the top on duo/fit shots.
+        hook_y = {"face": hc.get("y_face", hc["y"]), "duo": hc["y"], "fit": hc["y"]}
+        spans = shot_spans or [(0.0, 1e9, "")]
+        t_end = cold + hc["seconds"]
+        for a, b, kind in spans:
+            lo, hi = max(0.0, a), min(t_end, b)
+            if hi - lo > 0.005:
+                lines.append(
+                    f"Dialogue: 1,{ass_time(lo)},{ass_time(hi)},Hook,,0,0,0,,"
+                    f"{{\\pos({CAP_X},{hook_y.get(kind, hc['y'])})}}{ass_escape(clip['hook'])}"
+                )
     for seg_s, seg_e, off in segments:
         words = [w for w in caption_words(clip.get("words", [])) if w["s"] >= seg_s - 0.05 and w["e"] <= seg_e + 0.05]
         for chunk in chunk_words(words, cc["max_words"], cc["max_chunk_sec"]):
@@ -630,7 +683,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
                 for a, b, yy in placed(t0 - seg_s + off, t1 - seg_s + off):
                     lines.append(
                         f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Cap,,0,0,0,,"
-                        f"{{\\pos({W // 2},{yy})}}{pop_tag}{' '.join(parts)}"
+                        f"{{\\pos({CAP_X},{yy})}}{pop_tag}{' '.join(parts)}"
                     )
     return "\n".join(lines) + "\n"
 
@@ -711,6 +764,23 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             segments.append((s_q, s_q + n / info["fps"], off))
             nframes.append(n)
             off += n / info["fps"]
+        # A camera cut within EDGE_CUT of a segment edge leaves 1-6 frames of the other camera
+        # (a flash): move the edge onto the cut.
+        edge = int(EDGE_CUT * info["fps"])
+        trimmed, off = [], 0.0
+        for k, (s_, e_, _) in enumerate(segments):
+            n = nframes[k]
+            cuts = [f for _, f in scene_cuts(video, s_, e_ - s_)]
+            lead = max([f for f in cuts if 0 < f <= edge], default=0)
+            tail = min([f for f in cuts if n - edge <= f < n], default=n)
+            if lead or tail < n:
+                log(f"  segment {k}: trimmed {lead} lead / {n - tail} tail frames at camera cuts")
+            s_ = s_ + lead / info["fps"]
+            n = tail - lead
+            nframes[k] = n
+            trimmed.append((s_, s_ + n / info["fps"], off))
+            off += n / info["fps"]
+        segments = trimmed
         layout, cx, cam, track = pick_layout(cfg, source, video, info, main[0], main[1])
         if track:
             log(f"  tracking: {len(track)} face samples")
@@ -738,8 +808,9 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 log(f"  segment {i}: " + ", ".join(f"{x['t0']:.2f}-{x['t1']:.2f} {x['kind']}" for x in shots))
                 k = len(shots)
                 graph.append(f"[{i}:v]setpts=PTS-STARTPTS,split={k}" + "".join(f"[s{i}_{j}]" for j in range(k)))
-                zoom = push_in(cfg, info["fps"])
                 for j, sh in enumerate(shots):
+                    anchor = (FACE_X, SAFE_TOP) if sh["kind"] == "face" else (FACE_X, rc["height"] / 2)
+                    zoom = push_in(cfg, info["fps"], anchor)
                     # Frame indices, not timestamps: rounding a time can move the switch by one frame.
                     end_opt = "" if sh["f1"] is None else f":end_frame={sh['f1']}"
                     graph.append(f"[s{i}_{j}]trim=start_frame={sh['f0']}{end_opt},setpts=PTS-STARTPTS[t{i}_{j}]")

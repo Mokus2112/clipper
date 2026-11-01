@@ -35,6 +35,10 @@ Hard rules:
   watching the clip answers. Good: "He bet his car on this", "Chat lied to him", "She was not ready for this",
   "This cost him $10,000". Bad (descriptive, no tension): "Kai's honest review of the greens",
   "Funny moment on stream", "Speed at the zoo". No emojis, no lies, not just the streamer's name.
+- If the clip only uses pronouns (he/she) for the people it is about, the hook must name them
+  ("Who pooped in Johnny Depp's bed?"), so a stranger knows who it is about.
+- Never state allegations about real people as fact in hook or title (crimes, abuse, disputed events):
+  attribute them to the speaker ("Mark Manson on ...") or phrase as the speaker's story.
 - title: under 70 characters, curiosity-driven, includes the streamer name.
 - story: one sentence, "setup -> payoff".
 - caption: one short line for TikTok/Instagram, under 100 characters, curiosity-driven, may differ from the title.

@@ -75,7 +75,7 @@ captions:
   y_shots: 1000            # shots layout fallback
   y_shots_duo: 1000        # shots layout, stacked duo: just under the seam
   y_shots_face: 1380       # shots layout, close-up: below the face, above the Shorts UI
-  y_fit: 1420              # fit layout: below the centred frame, still above the platforms' caption area
+  y_fit: 1400              # fit layout: below the centred frame, above the 420 px bottom UI zone (TikTok/Reels)
   pop: 1.0                 # 1.0 = no scale pop (Badi 2026-11-01: 1.12 looked jittery); word highlight colour stays
 
 hook:
@@ -84,6 +84,7 @@ hook:
   seconds: 2.5
   size: 72
   y: 330
+  y_face: 1180        # shots layout close-ups: over the chest, clear of the forehead and the captions
 
 music:
   threshold: 0.3   # YAMNet music score above which a second counts as "music"
@@ -150,6 +151,7 @@ sources:
     streamer: Lacy
     channel_url: https://www.youtube.com/@LacyHimself   # US streamer (UCeoZXkaJDtdTHafgoZeDcAA); @Lacy is an unrelated Hungarian channel
     campaign_url: https://contentrewards.com/campaigns/4479e5e2-9a00-489e-8b0c-345834f37cc7
+    platforms: [youtube, tiktok, instagram, x]   # campaign-allowed platforms (posts.md)
     layout: auto
     tags: [lacy, stream, clips]
     credit: "Credit: Lacy (https://www.youtube.com/@LacyHimself)"
@@ -171,6 +173,7 @@ sources:
     streamer: Scape
     channel_url: ""   # TODO: pick a streamer VOD with Scape gameplay per run (fetch <url>)
     campaign_url: https://contentrewards.com/campaigns/8553875d-dfb0-4a97-aea5-448008876e46
+    platforms: [youtube, tiktok]   # campaign-allowed platforms (posts.md)
     layout: auto
     tags: [scape, gaming, climbinggame]
     credit: "Scape on Steam: https://store.steampowered.com/app/4678630/Scape"
@@ -182,6 +185,7 @@ sources:
     streamer: Solved w/ Mark Manson
     channel_url: https://www.youtube.com/@IAmMarkManson
     campaign_url: https://contentrewards.com/campaigns/6bdc8e4b-3ebf-44f1-aedb-067589ca9c89
+    platforms: [youtube, instagram]   # campaign-allowed platforms (posts.md)
     layout: shots   # podcast: close-ups -> face crop, wide two-shot -> stacked duo
     tags: [markmanson, podcast, selfimprovement]
     credit: "Credit: Mark Manson (https://www.youtube.com/@IAmMarkManson)"
