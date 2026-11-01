@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .common import log, path_of, probe, run, tool, write_json
 
-EFFECTS = ["zoom", "shake", "flash", "red", "bw"]
+EFFECTS = ["zoom", "shake", "red", "bw"]  # flash removed 2026-11-01: white frames read as a glitch
 
 ANALYZE_PROMPT = """You are a viral short-form video editor.
 Below is the transcript and audio analysis of a recent trending YouTube Short.
@@ -22,12 +22,11 @@ Audio features (0-1 scale):
 - Clip score: {score}/10
 
 Which ONE visual effect would make this clip MORE viral if applied subtly?
-Choose exactly one from: zoom, shake, flash, red, bw, none
+Choose exactly one from: zoom, shake, red, bw, none
 
 Rules:
 - zoom: slow push-in, good for reaction/surprise moments
 - shake: camera shake, good for explosive/rage moments
-- flash: white flash cut, good for punchlines
 - red: red tint, good for dramatic/intense moments
 - bw: black-and-white, good for cinematic/emotional moments
 - none: the clip is strong without any effect
@@ -252,15 +251,13 @@ def pick_effects(cfg: dict, clip: dict) -> list[str]:
     max_n = cfg.get("memes", {}).get("max_per_clip", 2)
     lib = load_library(cfg)
     scores = lib.get("scores", {})
+    # Only currently supported effects: older libraries may still contain "flash".
+    scores = {k: v for k, v in scores.items() if k in EFFECTS}
     if not scores:
         return []
 
-    # Bias: high reaction → prefer zoom/shake; high music → skip (Content ID caution)
+    # Bias: high reaction → prefer zoom/shake
     reaction = clip.get("reaction_peak", 0.0)
-    music = clip.get("music") or 0.0
-    if music > 0.3:
-        scores = {k: v for k, v in scores.items() if k not in ("flash",)}
-
     if reaction > 0.5:
         for k in ("zoom", "shake"):
             if k in scores:
@@ -293,9 +290,6 @@ def meme_filter_chain(effects: list[str], node_in: str, node_out: str, W: int, H
             parts.append(f"[{cur}]split[fxm{i}][fxe{i}]")
             parts.append(f"[fxe{i}]scale={W + 48}:{H + 48},crop={W}:{H}:24+16*sin(t*41):24+16*cos(t*33)[fxz{i}]")
             parts.append(f"[fxm{i}][fxz{i}]overlay=0:0:enable='{on}'[{nxt}]")
-        elif ef == "flash":
-            parts.append(f"[{cur}]drawbox=x=0:y=0:w=iw:h=ih:color=white@0.85:t=fill"
-                         f":enable='between(t,{a:.2f},{a + 0.12:.2f})'[{nxt}]")
         elif ef == "red":
             parts.append(f"[{cur}]colorchannelmixer=rr=1.4:rg=0.1:rb=0.1:gg=0.6:bb=0.6:enable='{on}'[{nxt}]")
         elif ef == "bw":

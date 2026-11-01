@@ -85,7 +85,7 @@ music:
   max_ratio: 0.5   # skip clips where music is heard in more than half the seconds (Content ID / blocked Shorts)
 
 memes:
-  max_per_clip: 2           # maximum meme effects applied per rendered clip
+  max_per_clip: 0           # Badi 2026-11-01: memes on hold, no effects on clips (was 2)
   claude_model: haiku       # fast + cheap for effect labelling
   shorts_per_source: 12     # Shorts to fetch per channel per refresh
   sources: []               # optional pinned channels (always analysed)

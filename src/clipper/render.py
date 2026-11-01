@@ -200,6 +200,35 @@ def chunk_words(words: list[dict], max_words: int, max_sec: float) -> list[list[
 _PROFANITY = re.compile(r"(?i)\b(motherf|f)u(ck\w*)|(?<![a-z])((?:bull)?sh)i(t\w*)|\b(b)i(tch\w*)|\b(c)u(nt\w*)")
 
 
+AUDIO_FADE = 0.018  # s, fade in/out on every segment before concat
+
+
+def snap_to_words(words: list[dict], start: float, end: float, sentence_end: bool = False,
+                  max_trim: float | None = None) -> tuple[float, float]:
+    """Snap a segment to word boundaries so a cut never lands mid-word.
+
+    Start: beginning of the first word starting at or after start-0.05.
+    End: end of the last word ending at or before end+0.3; with sentence_end, if one of the
+    words in the segment ends a sentence (. ! ?), the segment closes at the last such word
+    (with max_trim: only if that cuts at most max_trim seconds, so the main segment does
+    not end on a dangling "So").
+    Falls back to the given times when no word fits.
+    """
+    first = next((w for w in words if w["s"] >= start - 0.05), None)
+    if first is None:
+        return start, end
+    inside = [w for w in words if w["s"] >= first["s"] and w["e"] <= end + 0.3]
+    if not inside:
+        return start, end
+    last = inside[-1]
+    if sentence_end:
+        enders = [w for w in inside if w["w"].rstrip("\"'”’)").endswith((".", "!", "?"))
+                  and (max_trim is None or last["e"] - w["e"] <= max_trim)]
+        if enders:
+            last = enders[-1]
+    return first["s"], last["e"]
+
+
 def censor(word: str) -> str:
     """Mask strong profanity in burned-in captions (audio is untouched): FUCK -> F*CK."""
     def mask(m: re.Match) -> str:
@@ -287,8 +316,10 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         cdir = jd / "clips" / clip["id"]
         cdir.mkdir(parents=True, exist_ok=True)
         out = cdir / "short.mp4"
-        main = (clip["start"], clip["end"])
+        main = snap_to_words(clip.get("words", []), clip["start"], clip["end"], sentence_end=True, max_trim=1.5)
         cold = (clip.get("payoff_start"), clip.get("payoff_end"))
+        if cold[0] is not None:
+            cold = snap_to_words(clip.get("words", []), cold[0], cold[1], sentence_end=True)
         segments = []
         if rc["cold_open"] and cold[0] is not None and cold[1] - cold[0] >= 0.5:
             segments.append((cold[0], cold[1], 0.0))
@@ -303,7 +334,10 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             inputs += ["-ss", f"{s:.2f}", "-t", f"{e - s:.2f}", "-i", video.resolve()]
             graph.append(layout_filter(cfg, info, layout, cx, cam, f"{i}:v", f"l{i}",
                                        track=track, seg_start=s))
-            concat += f"[l{i}][{i}:a:0]"
+            # Short audio fades at every cut so word-boundary splices do not click.
+            fd, dur = AUDIO_FADE, e - s
+            graph.append(f"[{i}:a:0]afade=t=in:st=0:d={fd},afade=t=out:st={max(dur - fd, 0):.3f}:d={fd}[a{i}]")
+            concat += f"[l{i}][a{i}]"
         audio = ",loudnorm=I=-14:TP=-1.5:LRA=11" if rc["loudnorm"] else ""
         graph.append(f"{concat}concat=n={len(segments)}:v=1:a=1[cv][ca0]")
         from .memes import pick_effects, meme_filter_chain
