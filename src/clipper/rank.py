@@ -22,6 +22,13 @@ Hard rules:
 - Clip length (start..end): {min_sec}-{max_sec} seconds. Absolute seconds from the transcript.
 - payoff_start/payoff_end: the 1.0-2.5 s peak moment INSIDE the clip (the scream, the punchline, the reaction).
   It is shown first as a cold open before the clip plays from the setup.
+- The clip must START at the beginning of a sentence and END at the end of a sentence (never mid-sentence,
+  never on a dangling "and"/"so"/"I mean"). The first sentence must make sense to a stranger on its own.
+- start_quote: the first 5-8 words of the clip, copied EXACTLY from the transcript (same words, same order).
+- end_quote: the last 5-8 words of the clip, copied EXACTLY from the transcript, ending a sentence.
+- payoff_quote: the payoff as a short complete phrase or sentence (3-10 words), copied EXACTLY from the
+  transcript, inside the clip. It must be understandable as the first thing a viewer hears.
+  The quotes decide the cut; the numbers are only a hint. A clip whose quotes are not in the transcript is dropped.
 - hook: on-screen text, 3-7 words, shown over the cold open. It must create tension or a question that only
   watching the clip answers. Good: "He bet his car on this", "Chat lied to him", "She was not ready for this",
   "This cost him $10,000". Bad (descriptive, no tension): "Kai's honest review of the greens",
@@ -37,7 +44,8 @@ Hard rules:
 - If nothing qualifies, return [] and nothing else. Returning [] is a correct answer for a boring stream.
 
 Return ONLY a JSON array:
-[{{"start": s, "end": s, "payoff_start": s, "payoff_end": s, "hook": "...", "title": "...", "story": "...",
+[{{"start": s, "end": s, "payoff_start": s, "payoff_end": s, "start_quote": "...", "end_quote": "...",
+"payoff_quote": "...", "hook": "...", "title": "...", "story": "...",
 "caption": "...", "hashtags": ["..."], "score": n, "reason": "..."}}]
 
 Transcript:
@@ -111,21 +119,41 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
         picks += extract_json(out)
     (jd / "rank_raw.txt").write_text("\n\n".join(raw))
 
+    from .anchors import find_quote, segment_words
+    seg_words = segment_words(segments)
     clips = []
     for p in sorted(picks, key=lambda p: -p.get("score", 0)):
         if p.get("score", 0) < min_score or len(clips) >= rc["clips_per_vod"]:
             continue
         start, end = float(p["start"]), float(p["end"])
+        # Times come from the quotes, not the ranker's numbers (those can be far off).
+        qs = find_quote(seg_words, p.get("start_quote", ""), near=start)
+        qe = find_quote(seg_words, p.get("end_quote", ""), near=end,
+                        lo=seg_words[qs[0]]["s"] if qs else None) if qs else None
+        if not qs or not qe:
+            log(f"dropping pick '{p.get('title', '')[:50]}': start/end quote not found in transcript")
+            continue
+        start, end = seg_words[qs[0]]["s"], seg_words[qe[1]]["e"]
+        qp = find_quote(seg_words, p.get("payoff_quote", ""), near=float(p.get("payoff_start", start)),
+                        lo=start - 1, hi=end + 1)
+        if qp:
+            p["payoff_start"], p["payoff_end"] = seg_words[qp[0]]["s"], seg_words[qp[1]]["e"]
+        else:
+            log(f"pick '{p.get('title', '')[:50]}': payoff quote not found, no cold open")
+            p["payoff_start"] = p["payoff_end"] = None
+        if not cc["min_sec"] - 3 <= end - start <= cc["max_sec"] + 5:
+            log(f"dropping pick '{p.get('title', '')[:50]}': quoted span is {end - start:.0f} s")
+            continue
         if any(start < c["end"] and end > c["start"] for c in clips):
             continue  # overlapping pick from two transcript parts
-        ps = min(max(float(p.get("payoff_start", start)), start), end)
-        pe = min(float(p.get("payoff_end", ps + 1.5)), end, ps + cfg["render"]["cold_open_max"])
+        ps, pe = p["payoff_start"], p["payoff_end"]
         clips.append({
             "id": f"{job_id}-c{len(clips) + 1}",
-            "start": start,
-            "end": end,
-            "payoff_start": round(ps, 2),
-            "payoff_end": round(pe, 2),
+            "start": round(start, 2),
+            "end": round(end, 2),
+            "payoff_start": round(ps, 2) if ps is not None else None,
+            "payoff_end": round(pe, 2) if pe is not None else None,
+            "quotes": {k: p.get(k, "") for k in ("start_quote", "end_quote", "payoff_quote")},
             "hook": p["hook"].strip(),
             "title": p["title"].strip()[:95],
             "story": p.get("story", ""),

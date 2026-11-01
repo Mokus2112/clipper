@@ -263,9 +263,14 @@ def plan_shots(video: Path, info: dict, start: float, end: float) -> list[dict]:
                         pairs.append((l, r))
             duo = None
             if len(pairs) * 2 >= len(with_faces):
+                cxs = lambda k: [p[k][0] + p[k][2] / 2 for p in pairs]  # noqa: E731
                 duo = {"kind": "duo",
                        "left": tuple(median([p[0][i] for p in pairs]) for i in range(4)),
-                       "right": tuple(median([p[1][i] for p in pairs]) for i in range(4))}
+                       "right": tuple(median([p[1][i] for p in pairs]) for i in range(4)),
+                       # Horizontal range each person moves through in the shot: the static crop
+                       # must cover it (someone leaning back laughing left a panel without a head).
+                       "left_span": (min(cxs(0)), max(cxs(0))),
+                       "right_span": (min(cxs(1)), max(cxs(1)))}
                 if duo_panels(duo, info, 2 * W_ASPECT_PANEL) is None:
                     duo = None  # too soft: fall back to face/fit below
             if duo:
@@ -281,15 +286,22 @@ def plan_shots(video: Path, info: dict, start: float, end: float) -> list[dict]:
 DUO_MIN_SRC_H = 600  # px of source height per duo panel; below this the ~2x upscale is visibly soft
 
 
-def duo_panel(box: tuple, info: dict, aspect: float, min_h: float = 0) -> tuple[int, int, int, int]:
-    """Source crop (w, h, x, y) around one person for a W x H/2 panel, face slightly below centre."""
+def duo_panel(box: tuple, info: dict, aspect: float, min_h: float = 0,
+              span: tuple[float, float] | None = None) -> tuple[int, int, int, int]:
+    """Source crop (w, h, x, y) around one person for a W x H/2 panel, face slightly below centre.
+
+    span: (min, max) face centre x over the shot; the crop is widened so the face stays inside
+    with 1.5 face widths of margin on both sides wherever the person moves.
+    """
     sw, sh = info["width"], info["height"]
     fx, fy, fw, fh = box
-    h = min(max(fh * sh * 4.5, sh * 0.45, min_h), sh)
+    need_w = ((span[1] - span[0]) + 3 * fw) * sw if span else 0
+    h = min(max(fh * sh * 4.5, sh * 0.45, min_h, need_w / aspect), sh)
     w = min(h * aspect, sw)
     h = w / aspect
+    mid = (span[0] + span[1]) / 2 if span else fx + fw / 2
     # Face a bit below the panel centre: leaves head room for the hook box on the top panel.
-    cx, cy = (fx + fw / 2) * sw, (fy + fh / 2) * sh - h * 0.08
+    cx, cy = mid * sw, (fy + fh / 2) * sh - h * 0.08
     x = min(max(cx - w / 2, 0), sw - w)
     y = min(max(cy - h / 2, 0), sh - h)
     return even(w), even(h), even(x), even(y)
@@ -301,8 +313,8 @@ def duo_panels(shot: dict, info: dict, aspect: float) -> tuple | None:
     A panel is widened to DUO_MIN_SRC_H when the natural framing is tighter (sharper, less
     upscaling); if the two widened crops would overlap, the duo layout is not usable.
     """
-    l = duo_panel(shot["left"], info, aspect, DUO_MIN_SRC_H)
-    r = duo_panel(shot["right"], info, aspect, DUO_MIN_SRC_H)
+    l = duo_panel(shot["left"], info, aspect, DUO_MIN_SRC_H, shot.get("left_span"))
+    r = duo_panel(shot["right"], info, aspect, DUO_MIN_SRC_H, shot.get("right_span"))
     if min(l[1], r[1]) < DUO_MIN_SRC_H or l[2] + l[0] > r[2]:
         return None
     return l, r
@@ -388,8 +400,8 @@ def quietest(audio_fn, t0: float, t1: float, sr: int = 16000) -> float | None:
 
 
 def snap_to_words(words: list[dict], start: float, end: float, sentence_end: bool = False,
-                  max_trim: float | None = None, audio_fn=None, timed: list[dict] | None = None
-                  ) -> tuple[float, float]:
+                  max_trim: float | None = None, audio_fn=None, timed: list[dict] | None = None,
+                  end_tol: float = 0.3) -> tuple[float, float]:
     """Snap a segment to word boundaries so a cut never lands mid-word.
 
     Start: beginning of the first word starting at or after start-0.05.
@@ -409,7 +421,8 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
     first = next((w for w in words if w["s"] >= start - 0.05), None)
     if first is None:
         return start, end
-    inside = [w for w in words if w["s"] >= first["s"] and w["e"] <= end + 0.3]
+    # end_tol: slack for imprecise ends; quote-anchored ends are exact word ends (tiny slack only).
+    inside = [w for w in words if w["s"] >= first["s"] and w["e"] <= end + end_tol]
     if not inside:
         return start, end
     last = inside[-1]
@@ -631,11 +644,13 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         if words:
             words = refine_words(words, audio_fn, min(w["s"] for w in words) - 0.5, max(w["e"] for w in words) + 0.5)
             clip = {**clip, "words": words}
+        tol = 0.02 if clip.get("quotes") else 0.3
         main = snap_to_words(raw_words, clip["start"], clip["end"], sentence_end=True, max_trim=1.5,
-                             audio_fn=audio_fn, timed=words)
+                             audio_fn=audio_fn, timed=words, end_tol=tol)
         cold = (clip.get("payoff_start"), clip.get("payoff_end"))
         if cold[0] is not None:
-            cold = snap_to_words(raw_words, cold[0], cold[1], sentence_end=True, audio_fn=audio_fn, timed=words)
+            cold = snap_to_words(raw_words, cold[0], cold[1], sentence_end=True, audio_fn=audio_fn, timed=words,
+                                 end_tol=tol)
         raw = []
         if rc["cold_open"] and cold[0] is not None and cold[1] - cold[0] >= 0.5:
             raw.append(cold)
