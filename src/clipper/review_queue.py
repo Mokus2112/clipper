@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from pathlib import Path
 
-from .common import path_of, read_json, write_json
+from .common import log, path_of, read_json, write_json
 
 
 def _path(cfg: dict) -> Path:
@@ -30,6 +30,12 @@ def _campaign_title(title: str, source: dict) -> str:
 
 
 def add(cfg: dict, clip: dict, source: dict, file: Path) -> None:
+    existing = next((i for i in load(cfg) if i["id"] == clip["id"]), None)
+    # A re-render must never wipe an approved or uploaded entry (its video_id/privacy would be lost
+    # and the clip would show as pending again). Re-render under a new id (e.g. -v2) instead.
+    if existing and existing["status"] in ("approved", "uploaded"):
+        log(f"{clip['id']}: already {existing['status']}, not re-queued; use a new clip id for a new version")
+        return
     items = [i for i in load(cfg) if i["id"] != clip["id"]]
     tags = source.get("tags", [])
     clip_tags = clip.get("hashtags") or [t.replace(" ", "") for t in tags]
