@@ -839,7 +839,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
         # A word is captioned only if its middle is inside the segment (no half-heard word at a cut).
         # A word is captioned only if it starts inside the segment and its middle is inside too:
         # no word from before the cut (cold open began after "To this day,"), no half-heard word at the end.
-        words = [w for w in caption_words(clip.get("words", []))
+        words = [w for w in caption_words(merge_punct(clip.get("words", [])))
                  if w["s"] >= seg_s - 0.02 and (w["s"] + w["e"]) / 2 <= seg_e]
         chunks = chunk_words(words, cc["max_words"], cc["max_chunk_sec"])
         for ci, chunk in enumerate(chunks):
