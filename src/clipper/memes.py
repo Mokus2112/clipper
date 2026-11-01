@@ -58,18 +58,48 @@ def save_library(cfg: dict, lib: dict) -> None:
 
 
 def fetch_channel_shorts(channel_url: str, n: int = 15) -> list[str]:
-    """Return up to n video URLs from a channel's Shorts feed."""
-    for suffix in ("/shorts", "/videos"):
+    """Most viewed of the channel's newest Shorts (looks at the newest 3*n, keeps the top n by views).
+
+    The Shorts tab is used directly: flat-playlist entries have no duration, so a duration
+    match-filter would silently drop everything.
+    """
+    res = subprocess.run(
+        [tool("yt-dlp"), "--flat-playlist", "--playlist-items", f"1-{n * 3}",
+         "--print", "%(id)s %(view_count)s", channel_url.rstrip("/") + "/shorts"],
+        capture_output=True, text=True, timeout=120,
+    )
+    rows = []
+    for line in res.stdout.splitlines():
+        vid, _, views = line.strip().partition(" ")
+        if vid:
+            rows.append((vid, int(views) if views.isdigit() else 0))
+    rows.sort(key=lambda r: r[1], reverse=True)
+    return [f"https://www.youtube.com/shorts/{vid}" for vid, _ in rows[:n]]
+
+
+def discover_channels(queries: list[str], k: int, per_query: int = 25) -> list[str]:
+    """Channel search: the k channels with the most total views across the search results."""
+    from collections import Counter
+    views: Counter = Counter()
+    for q in queries:
         res = subprocess.run(
-            [tool("yt-dlp"), "--flat-playlist", "--playlist-items", f"1-{n * 2}",
-             "--print", "id", "--match-filter", "duration<90",
-             channel_url + suffix],
-            capture_output=True, text=True, timeout=90,
+            [tool("yt-dlp"), "--flat-playlist", "--print", "%(channel_url)s %(view_count)s %(duration)s",
+             f"ytsearch{per_query}:{q}"],
+            capture_output=True, text=True, timeout=120,
         )
-        ids = [line.strip() for line in res.stdout.splitlines() if line.strip()]
-        if ids:
-            return [f"https://www.youtube.com/shorts/{vid}" for vid in ids[:n]]
-    return []
+        for line in res.stdout.splitlines():
+            parts = line.split()
+            if len(parts) != 3 or not parts[0].startswith("http"):
+                continue
+            url, v, dur = parts
+            # Only Shorts-length results count: long-form clip channels often have no Shorts tab.
+            try:
+                if float(dur) > 90:
+                    continue
+            except ValueError:
+                continue
+            views[url] += int(v) if v.isdigit() else 0
+    return [url for url, _ in views.most_common(k)]
 
 
 def _download_preview(url: str, out_dir: Path) -> Path | None:
@@ -87,38 +117,41 @@ def _download_preview(url: str, out_dir: Path) -> Path | None:
     return out if out.exists() else None
 
 
-def _quick_transcript(video: Path) -> str:
-    """Fast Whisper tiny transcript of a short clip."""
+_MODELS: dict = {}
+
+
+def _audio(video: Path):
+    """16 kHz mono float32, decoded with the pipeline's own ffmpeg helper (no soundfile/PyAV)."""
+    from .transcribe import load_audio
+    return load_audio(video, 0.0, 30.0)
+
+
+def _quick_transcript(audio) -> str:
+    """Fast Whisper tiny transcript of a short clip (model loaded once per refresh)."""
     try:
-        import faster_whisper
-        model = faster_whisper.WhisperModel("tiny", device="cpu", compute_type="int8")
-        segs, _ = model.transcribe(str(video), language=None, beam_size=1)
+        if "whisper" not in _MODELS:
+            from faster_whisper import WhisperModel
+            _MODELS["whisper"] = WhisperModel("tiny", device="cpu", compute_type="int8")
+        segs, _ = _MODELS["whisper"].transcribe(audio, language=None, beam_size=1)
         return " ".join(s.text.strip() for s in segs)[:1000]
     except Exception as exc:
         log(f"memes: transcript failed: {exc}")
         return ""
 
 
-def _yamnet_scores(video: Path) -> tuple[float, float]:
+def _yamnet_scores(audio) -> tuple[float, float]:
     """Mean (reaction, music) scores for the preview clip."""
     try:
         import numpy as np
-        import soundfile as sf
         from .audio_ai import Yamnet, WINDOW
-        wav = video.with_suffix(".wav")
-        subprocess.run(
-            [tool("ffmpeg"), "-v", "error", "-y", "-i", str(video),
-             "-ac", "1", "-ar", "16000", str(wav)],
-            check=True, capture_output=True,
-        )
-        audio, _ = sf.read(str(wav))
-        ym = Yamnet(threads=2)
+        if "yamnet" not in _MODELS:
+            _MODELS["yamnet"] = Yamnet(threads=2)
+        ym = _MODELS["yamnet"]
         reactions, musics = [], []
-        for start in range(0, len(audio) - WINDOW, 16000):
+        for start in range(0, max(len(audio) - WINDOW, 0) + 1, 16000):
             r, m = ym.tag(audio[start: start + WINDOW].astype(np.float32))
             reactions.append(r)
             musics.append(m)
-        wav.unlink(missing_ok=True)
         if not reactions:
             return 0.0, 0.0
         return float(np.mean(reactions)), float(np.mean(musics))
@@ -161,8 +194,12 @@ def _cluster(labels: list[str], n_total: int) -> dict[str, float]:
 def refresh(cfg: dict) -> dict:
     """Scrape, analyse, cluster, save library.json. Returns the library."""
     mc = cfg.get("memes", {})
-    sources = mc.get("sources", [])
+    sources = list(mc.get("sources", []))
     n_shorts = mc.get("shorts_per_source", 12)
+    if mc.get("search_queries"):
+        found = discover_channels(mc["search_queries"], mc.get("discover_channels", 4))
+        log(f"memes: discovered channels: {found}")
+        sources += [u for u in found if u not in sources]
 
     if not sources:
         log("memes: no sources configured, skipping refresh")
@@ -184,8 +221,15 @@ def refresh(cfg: dict) -> dict:
                 video = _download_preview(url, item_dir)
                 if not video:
                     continue
-                transcript = _quick_transcript(video)
-                reaction, music = _yamnet_scores(video)
+                try:
+                    audio = _audio(video)
+                except Exception as exc:
+                    log(f"memes: audio decode failed for {vid}: {exc}")
+                    continue
+                transcript = _quick_transcript(audio)
+                reaction, music = _yamnet_scores(audio)
+                if not transcript and reaction == 0.0 and music == 0.0:
+                    continue  # no signal: a blind label would only skew the clusters
                 label = _ask_claude_effect(cfg, transcript, reaction, music, item_dir)
                 if label:
                     labels.append(label)

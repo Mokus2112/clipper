@@ -88,10 +88,13 @@ memes:
   max_per_clip: 2           # maximum meme effects applied per rendered clip
   claude_model: haiku       # fast + cheap for effect labelling
   shorts_per_source: 12     # Shorts to fetch per channel per refresh
-  sources:                  # large clip channels to track for trending effects
-    - https://www.youtube.com/@NRGgg
-    - https://www.youtube.com/@StreamMoments
-    - https://www.youtube.com/@BestStreamMoments
+  sources: []               # optional pinned channels (always analysed)
+  discover_channels: 4      # channel search: top channels by total views across these queries
+  search_queries:
+    - streamer funny moments shorts
+    - twitch clips shorts
+    - kai cenat stream clip
+    - ishowspeed stream clip
 
 telegram:
   notify: true           # `run` sends new clips to Telegram for review and manual upload
