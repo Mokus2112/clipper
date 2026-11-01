@@ -190,7 +190,7 @@ def scene_cuts(video: Path, start: float, dur: float) -> list[tuple[float, int]]
     (same -ss), so layout switches can be placed on that frame with trim start_frame/end_frame.
     """
     res = subprocess.run(
-        [tool("ffmpeg"), "-v", "error", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(video), "-an",
+        [tool("ffmpeg"), "-v", "error", "-ss", f"{start:.6f}", "-t", f"{dur:.6f}", "-i", str(video), "-an",
          "-vf", "setpts=PTS-STARTPTS,scale=320:-2,scdet=threshold=100,metadata=print:file=-", "-f", "null", "-"],
         capture_output=True, text=True, check=True,
     )
@@ -222,7 +222,10 @@ def all_faces(cap, detector, t: float) -> list[tuple[float, float, float, float]
             for f in faces if f[2] / W >= 0.02]
 
 
-def plan_shots(video: Path, start: float, end: float) -> list[dict]:
+W_ASPECT_PANEL = 1080 / 1920  # output aspect; a duo panel is twice as wide relative to its height
+
+
+def plan_shots(video: Path, info: dict, start: float, end: float) -> list[dict]:
     """Split [start, end] at camera cuts and pick a static layout per shot.
 
     kind "face": one framing, 9:16 crop centred on the main face (static, no tracking inside a shot)
@@ -257,10 +260,15 @@ def plan_shots(video: Path, start: float, end: float) -> list[dict]:
                     l, r = sorted(top2, key=lambda b: b[0])
                     if (r[0] + r[2] / 2) - (l[0] + l[2] / 2) >= DUO_MIN_SEP:
                         pairs.append((l, r))
+            duo = None
             if len(pairs) * 2 >= len(with_faces):
-                shot.update(kind="duo",
-                            left=tuple(median([p[0][i] for p in pairs]) for i in range(4)),
-                            right=tuple(median([p[1][i] for p in pairs]) for i in range(4)))
+                duo = {"kind": "duo",
+                       "left": tuple(median([p[0][i] for p in pairs]) for i in range(4)),
+                       "right": tuple(median([p[1][i] for p in pairs]) for i in range(4))}
+                if duo_panels(duo, info, 2 * W_ASPECT_PANEL) is None:
+                    duo = None  # too soft: fall back to face/fit below
+            if duo:
+                shot.update(duo)
             else:
                 main = [max(f, key=lambda b: b[2] * b[3]) for f in with_faces]
                 shot.update(kind="face", cx=median([b[0] + b[2] / 2 for b in main]))
@@ -269,17 +277,34 @@ def plan_shots(video: Path, start: float, end: float) -> list[dict]:
     return shots
 
 
-def duo_panel(box: tuple, info: dict, aspect: float) -> tuple[int, int, int, int]:
-    """Source crop (w, h, x, y) around one person for a W x H/2 panel, face in the upper middle."""
+DUO_MIN_SRC_H = 600  # px of source height per duo panel; below this the ~2x upscale is visibly soft
+
+
+def duo_panel(box: tuple, info: dict, aspect: float, min_h: float = 0) -> tuple[int, int, int, int]:
+    """Source crop (w, h, x, y) around one person for a W x H/2 panel, face slightly below centre."""
     sw, sh = info["width"], info["height"]
     fx, fy, fw, fh = box
-    h = min(max(fh * sh * 4.5, sh * 0.45), sh)
+    h = min(max(fh * sh * 4.5, sh * 0.45, min_h), sh)
     w = min(h * aspect, sw)
     h = w / aspect
-    cx, cy = (fx + fw / 2) * sw, (fy + fh / 2) * sh + h * 0.08
+    # Face a bit below the panel centre: leaves head room for the hook box on the top panel.
+    cx, cy = (fx + fw / 2) * sw, (fy + fh / 2) * sh - h * 0.08
     x = min(max(cx - w / 2, 0), sw - w)
     y = min(max(cy - h / 2, 0), sh - h)
     return even(w), even(h), even(x), even(y)
+
+
+def duo_panels(shot: dict, info: dict, aspect: float) -> tuple | None:
+    """Both duo crops with at least DUO_MIN_SRC_H source pixels of height, or None.
+
+    A panel is widened to DUO_MIN_SRC_H when the natural framing is tighter (sharper, less
+    upscaling); if the two widened crops would overlap, the duo layout is not usable.
+    """
+    l = duo_panel(shot["left"], info, aspect, DUO_MIN_SRC_H)
+    r = duo_panel(shot["right"], info, aspect, DUO_MIN_SRC_H)
+    if min(l[1], r[1]) < DUO_MIN_SRC_H or l[2] + l[0] > r[2]:
+        return None
+    return l, r
 
 
 def push_in(cfg: dict, fps: float) -> str:
@@ -305,7 +330,7 @@ def shot_filter(cfg: dict, info: dict, shot: dict, inp: str, out: str) -> str:
         return layout_filter(cfg, info, "center", shot["cx"], None, inp, out)
     if shot["kind"] == "duo":
         ph = H // 2
-        (lw, lh, lx, ly), (rw, rh, rx, ry) = (duo_panel(shot[k], info, W / ph) for k in ("left", "right"))
+        (lw, lh, lx, ly), (rw, rh, rx, ry) = duo_panels(shot, info, W / ph)
         return (
             f"[{inp}]split[{out}a][{out}b];"
             f"[{out}a]crop={lw}:{lh}:{lx}:{ly},scale={W}:{ph}[{out}t];"
@@ -362,7 +387,8 @@ def quietest(audio_fn, t0: float, t1: float, sr: int = 16000) -> float | None:
 
 
 def snap_to_words(words: list[dict], start: float, end: float, sentence_end: bool = False,
-                  max_trim: float | None = None, audio_fn=None) -> tuple[float, float]:
+                  max_trim: float | None = None, audio_fn=None, timed: list[dict] | None = None
+                  ) -> tuple[float, float]:
     """Snap a segment to word boundaries so a cut never lands mid-word.
 
     Start: beginning of the first word starting at or after start-0.05.
@@ -375,6 +401,8 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
     With audio_fn(start, duration) -> 16 kHz samples, the end is refined to the quietest point
     in [last word end, +0.3 s] (Whisper often glues the next word's start onto the previous end,
     so the next-word bound alone can leave no tail at all).
+    Which words belong to the segment is decided on `words` (the timing the ranker saw);
+    the cut times come from `timed` (onset-refined copy, same order) when given.
     Falls back to the given times when no word fits.
     """
     first = next((w for w in words if w["s"] >= start - 0.05), None)
@@ -390,6 +418,9 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
         if enders:
             last = enders[-1]
     i0, i1 = words.index(first), words.index(last)
+    if timed is not None:
+        words = timed
+        first, last = words[i0], words[i1]
     s0 = first["s"] - SNAP_PRE
     if i0 > 0:
         s0 = max(s0, words[i0 - 1]["e"])
@@ -402,6 +433,71 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
     if q is not None:
         e1 = max(e1, q)
     return round(min(s0, first["s"]), 3), round(max(e1, last["e"]), 3)
+
+
+SILENCE_DB = -35.0   # 20 ms RMS below this counts as silence for word-timing refinement
+
+
+def refine_words(words: list[dict], audio_fn, t0: float, t1: float) -> list[dict]:
+    """Pin Whisper word starts to audible onsets (Whisper word times are often 0.2-0.6 s off).
+
+    Every onset after >= 50 ms of silence is a word start. It is given to the word whose start
+    is nearest (within 0.5 s, keeping word order); that word starts there and the previous word
+    ends where the silence began. Words inside continuous speech keep Whisper's timing.
+    """
+    import numpy as np
+    if audio_fn is None or not words:
+        return words
+    a = audio_fn(t0, t1 - t0)
+    hop, win = 160, 320
+    db = np.array([20 * np.log10(np.sqrt(np.mean(a[i:i + win] ** 2)) + 1e-9)
+                   for i in range(0, max(len(a) - win, 0), hop)])
+    speech = db >= SILENCE_DB
+    onsets = []  # (onset time, silence start)
+    for i in range(5, len(speech)):
+        if speech[i] and not speech[i - 5:i].any():
+            j = i - 1
+            while j > 0 and not speech[j - 1]:
+                j -= 1
+            onsets.append((t0 + i * 0.01, t0 + j * 0.01))
+    out = [dict(w) for w in words]
+    taken: set[int] = set()
+    for o, sil in onsets:
+        # Near starts (0.5 s), or a word whose overlong Whisper span contains the onset (<= 1 s in).
+        cands = [k for k, w in enumerate(out)
+                 if (abs(w["s"] - o) <= 0.5 or w["s"] < o < w["e"] and o - w["s"] <= 1.0) and k not in taken
+                 and (k == 0 or out[k - 1]["s"] < o - 0.02)
+                 and (k + 1 == len(out) or o < out[k + 1]["s"] - 0.02 or (k + 1) not in taken)]
+        if not cands:
+            continue
+        # A word whose Whisper start lies in the silence before the onset must start at the onset.
+        in_gap = [k for k in cands if sil - 0.02 <= out[k]["s"] < o]
+        k = in_gap[0] if in_gap else min(cands, key=lambda k: abs(out[k]["s"] - o))
+        out[k]["s"] = round(o, 3)
+        out[k]["e"] = max(out[k]["e"], o + 0.05)
+        if k > 0 and out[k - 1]["e"] > sil:
+            out[k - 1]["e"] = round(max(sil, out[k - 1]["s"] + 0.05), 3)
+        taken.add(k)
+    # Keep order strictly increasing after the moves.
+    for k in range(1, len(out)):
+        if out[k]["s"] <= out[k - 1]["s"]:
+            out[k]["s"] = round(out[k - 1]["s"] + 0.02, 3)
+            out[k]["e"] = max(out[k]["e"], out[k]["s"] + 0.05)
+    return out
+
+
+def frame_grid(s: float, e: float, info: dict) -> tuple[float, int]:
+    """Snap a segment onto the source frame grid: (start on a frame time, whole frame count).
+
+    The first video frame then sits exactly at the segment start and video and audio have the
+    same length, so concat adds no padding and captions computed from the segments stay in sync.
+    """
+    import math
+    fps, st = info["fps"], info.get("v_start", 0.0)
+    k = math.ceil((s - st) * fps - 1e-6)
+    s_q = st + k / fps
+    n = max(1, round((e - s_q) * fps))
+    return s_q, n
 
 
 def censor(word: str) -> str:
@@ -493,15 +589,27 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         out = cdir / "short.mp4"
         from .transcribe import load_audio
         audio_fn = lambda t0, d: load_audio(video, t0, d)  # noqa: E731
-        main = snap_to_words(clip.get("words", []), clip["start"], clip["end"], sentence_end=True, max_trim=1.5,
-                             audio_fn=audio_fn)
+        raw_words = clip.get("words", [])
+        words = raw_words
+        if words:
+            words = refine_words(words, audio_fn, min(w["s"] for w in words) - 0.5, max(w["e"] for w in words) + 0.5)
+            clip = {**clip, "words": words}
+        main = snap_to_words(raw_words, clip["start"], clip["end"], sentence_end=True, max_trim=1.5,
+                             audio_fn=audio_fn, timed=words)
         cold = (clip.get("payoff_start"), clip.get("payoff_end"))
         if cold[0] is not None:
-            cold = snap_to_words(clip.get("words", []), cold[0], cold[1], sentence_end=True, audio_fn=audio_fn)
-        segments = []
+            cold = snap_to_words(raw_words, cold[0], cold[1], sentence_end=True, audio_fn=audio_fn, timed=words)
+        raw = []
         if rc["cold_open"] and cold[0] is not None and cold[1] - cold[0] >= 0.5:
-            segments.append((cold[0], cold[1], 0.0))
-        segments.append((main[0], main[1], sum(e - s for s, e, _ in segments)))
+            raw.append(cold)
+        raw.append(main)
+        # Frame-exact segments: (start, end, output offset), each a whole number of frames.
+        segments, nframes, off = [], [], 0.0
+        for a_, b_ in raw:
+            s_q, n = frame_grid(a_, b_, info)
+            segments.append((s_q, s_q + n / info["fps"], off))
+            nframes.append(n)
+            off += n / info["fps"]
         layout, cx, cam, track = pick_layout(cfg, source, video, info, main[0], main[1])
         if track:
             log(f"  tracking: {len(track)} face samples")
@@ -509,10 +617,12 @@ def render(cfg: dict, job_id: str) -> list[Path]:
 
         inputs, graph, concat = [], [], ""
         for i, (s, e, _) in enumerate(segments):
-            inputs += ["-ss", f"{s:.3f}", "-t", f"{e - s:.3f}", "-i", video.resolve()]
+            fps = info["fps"]
+            # -t half a frame short of n frames: exactly n video frames; audio is padded to n/fps.
+            inputs += ["-ss", f"{s:.6f}", "-t", f"{(nframes[i] - 0.5) / fps:.6f}", "-i", video.resolve()]
             if layout == "shots":
                 # One static layout per camera shot; trim on a single input keeps every frame exactly once.
-                shots = plan_shots(video, s, e)
+                shots = plan_shots(video, info, s, e)
                 log(f"  segment {i}: " + ", ".join(f"{x['t0']:.2f}-{x['t1']:.2f} {x['kind']}" for x in shots))
                 k = len(shots)
                 graph.append(f"[{i}:v]setpts=PTS-STARTPTS,split={k}" + "".join(f"[s{i}_{j}]" for j in range(k)))
@@ -528,8 +638,9 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 graph.append(layout_filter(cfg, info, layout, cx, cam, f"{i}:v", f"l{i}",
                                            track=track, seg_start=s))
             # Short audio fades at every cut so word-boundary splices do not click.
-            fi, fo, dur = AUDIO_FADE_IN, AUDIO_FADE_OUT, e - s
-            graph.append(f"[{i}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.3f}:d={fo}[a{i}]")
+            fi, fo, dur = AUDIO_FADE_IN, AUDIO_FADE_OUT, (nframes[i] - 0.5) / fps
+            graph.append(f"[{i}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
+                         f"apad=whole_dur={nframes[i] / fps:.6f}[a{i}]")
             concat += f"[l{i}][a{i}]"
         audio = ",loudnorm=I=-14:TP=-1.5:LRA=11" if rc["loudnorm"] else ""
         graph.append(f"{concat}concat=n={len(segments)}:v=1:a=1[cv][ca0]")

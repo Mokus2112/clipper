@@ -95,8 +95,14 @@ def notify(cfg: dict, clip_ids: list[str] | None = None) -> int:
     items = [i for i in review_queue.load(cfg)
              if (i["id"] in clip_ids if clip_ids else i["status"] == "pending" and not i.get("notified"))]
     for item in items:
+        # Explicit size/duration/thumbnail: without them Telegram may show the 9:16 Short distorted.
         video = ["-F", f"chat_id={chat_id}", "-F", f"caption={caption(item)}",
-                 "-F", "supports_streaming=true", "-F", f"video=@{item['file']}"]
+                 "-F", "supports_streaming=true", "-F", f"video=@{item['file']}",
+                 "-F", f"width={cfg['render']['width']}", "-F", f"height={cfg['render']['height']}",
+                 "-F", f"duration={round(item['duration'])}"]
+        thumb = Path(item["file"]).with_name("preview.jpg")
+        if thumb.exists():
+            video += ["-F", "thumbnail=attach://thumb", "-F", f"thumb=@{thumb}"]
         if not send(token, video, "sendVideo"):
             continue
         send(token, ["-F", f"chat_id={chat_id}", "-F", f"text={post_texts(item)}"], "sendMessage")
