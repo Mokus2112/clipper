@@ -249,6 +249,66 @@ def check_caption_words(video: Path, ass: Path) -> list[str]:
     return [f"caption words not heard in the audio: {', '.join(missing[:8])}"] if len(missing) >= 2 else []
 
 
+def _repeats(seq: list[tuple[str, float]]) -> list[tuple[int, int]]:
+    """Index spans (i, n) where a token or short phrase (n=1..3 tokens) is immediately repeated."""
+    out = []
+    for n in (1, 2, 3):
+        for i in range(len(seq) - 2 * n + 1):
+            a = [t for t, _ in seq[i:i + n]]
+            b = [t for t, _ in seq[i + n:i + 2 * n]]
+            if all(len(x) >= 1 for x in a) and all(x == y or (len(x) > 3 and x[:3] == y[:3]) for x, y in zip(a, b)):
+                out.append((i, n))
+    return out
+
+
+def check_repeated_words(video: Path, ass: Path) -> list[str]:
+    """Stutters/repeats ('I I', 'he didn't he didn't') must be captioned exactly as heard:
+    a caption repeat needs an audible repeat at both onsets, an audible repeat needs a caption repeat."""
+    from faster_whisper import WhisperModel
+    from .transcribe import load_audio
+    norm = lambda w: re.sub(r"[^a-z0-9']", "", w.lower().replace("*", ""))  # noqa: E731
+    cap, prev = [], None  # one word may span two Dialogue lines (position change): merge those
+    for line in ass.read_text().splitlines():
+        if not line.startswith("Dialogue: 0,"):
+            continue
+        p = line.split(",", 9)
+        m = re.search(r"\\c&H0000E0FF\}([^{]+)", p[9])
+        key = re.sub(r"\{\\pos[^}]*\}", "", p[9])  # same text and same highlighted word = same word
+        h, mi, sec = p[1].split(":")
+        s0 = int(h) * 3600 + int(mi) * 60 + float(sec)
+        h, mi, sec = p[2].split(":")
+        e0 = int(h) * 3600 + int(mi) * 60 + float(sec)
+        t = norm(m.group(1)) if m else ""
+        if t and not (prev and prev[0] == key and s0 - prev[1] < 0.03):
+            cap.append((t, s0))
+        prev = (key, e0)
+    audio = load_audio(video, 0.0, _duration(video))
+    heard: list[tuple[str, float]] = []
+    for size in ("small", "base"):
+        segs, _ = WhisperModel(size, device="cpu", compute_type="int8").transcribe(
+            audio, language="en", word_timestamps=True)
+        h = [(norm(w.word), w.start) for s in segs for w in (s.words or [])]
+        if size == "small":
+            heard = [x for x in h if x[0]]
+        else:
+            base = [x for x in h if x[0]]
+    problems = []
+    cap_rep = _repeats(cap)
+    for src, name in ((heard, "small"), (base, "base")):
+        for i, n in _repeats(src):
+            t0 = src[i][1]
+            near = [(j, m) for j, m in cap_rep if abs(cap[j][1] - t0) <= 0.8]
+            if not near:
+                problems.append(f"repeat heard but not captioned @{t0:.2f}: "
+                                f"{' '.join(t for t, _ in src[i:i + 2 * n])} ({name})")
+    for j, m in cap_rep:
+        t0 = cap[j][1]
+        ok = any(abs(src[i][1] - t0) <= 0.8 for src in (heard, base) for i, _n in _repeats(src))
+        if not ok:
+            problems.append(f"repeat captioned but not heard @{t0:.2f}: {' '.join(t for t, _ in cap[j:j + 2 * m])}")
+    return sorted(set(problems))
+
+
 def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, float]],
             source_starts: list[tuple[float, float]] = ()) -> list[str]:
     video = cdir / "short.mp4"
@@ -263,5 +323,6 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
     problems += check_caption_overlap(cdir / "captions.ass")
     problems += check_caption_sync(video, cdir / "captions.ass")
     problems += check_caption_words(video, cdir / "captions.ass")
+    problems += check_repeated_words(video, cdir / "captions.ass")
     (cdir / "qa.txt").write_text("\n".join(problems) + "\n" if problems else "ok\n")
     return problems
