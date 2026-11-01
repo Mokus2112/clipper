@@ -184,6 +184,7 @@ def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam:
 SCENE_CUT_SCORE = 4.0   # scdet score; real camera cuts score ~10, in-shot motion stays below 1
 MIN_SHOT = 0.5          # s, shorter shots are merged into the previous one
 DUO_MIN_SEP = 0.25
+FACE_CROP_H = 0.9       # close-up crop uses the top 90% of the source frame
 FACE_MIN_W = 0.0        # 0 = always face-crop a single person; fit puts edge faces in the button column      # two faces at least this far apart (fraction of width) -> stacked duo layout
 
 
@@ -229,6 +230,10 @@ def all_faces(cap, detector, t: float) -> list[tuple[float, float, float, float]
 W_ASPECT_PANEL = 1080 / 1920  # output aspect; a duo panel is twice as wide relative to its height
 
 
+def fps_of(video: Path) -> float:
+    return probe(video)["fps"]
+
+
 def plan_shots(video: Path, info: dict, start: float, end: float) -> list[dict]:
     """Split [start, end] at camera cuts and pick a static layout per shot.
 
@@ -239,12 +244,17 @@ def plan_shots(video: Path, info: dict, start: float, end: float) -> list[dict]:
     """
     import cv2
     dur = end - start
-    cuts = [c for c in scene_cuts(video, start, dur) if MIN_SHOT <= c[0] <= dur - MIN_SHOT]
-    merged = [(0.0, 0)]
+    all_cuts = scene_cuts(video, start, dur)
+    # Cuts this close to a segment edge would leave a few frames of another camera (a flash).
+    # Those frames are replaced by holding the neighbouring shot's edge frame (audio continues).
+    lead = max([c for c in all_cuts if 0 < c[0] < MIN_SHOT], default=None, key=lambda c: c[0])
+    tail = min([c for c in all_cuts if dur - MIN_SHOT < c[0] < dur], default=None, key=lambda c: c[0])
+    cuts = [c for c in all_cuts if MIN_SHOT <= c[0] <= dur - MIN_SHOT]
+    merged = [lead if lead else (0.0, 0)]
     for c in cuts:
         if c[0] - merged[-1][0] >= MIN_SHOT:
             merged.append(c)
-    merged.append((dur, None))  # last shot runs to the end of the segment
+    merged.append((tail[0], tail[1]) if tail else (dur, None))
 
     detector = cv2.FaceDetectorYN.create(str(ROOT / "models" / "face_detection_yunet_2023mar.onnx"), "",
                                          (640, 360), 0.6, 0.3, 50)
@@ -299,6 +309,10 @@ def plan_shots(video: Path, info: dict, start: float, end: float) -> list[dict]:
                     shot.update(kind="face", cx=cx)
         shots.append(shot)
     cap.release()
+    if shots:
+        shots[0]["hold_lead"] = lead[1] if lead else 0           # frames to fill with the first frame
+        total = round(dur * fps_of(video))
+        shots[-1]["hold_tail"] = (total - tail[1]) if tail else 0  # frames to fill with the last frame
     return shots
 
 
@@ -365,8 +379,13 @@ def shot_filter(cfg: dict, info: dict, shot: dict, inp: str, out: str) -> str:
     rc = cfg["render"]
     W, H = rc["width"], rc["height"]
     if shot["kind"] == "face":
-        # Face left of centre: the right ~160 px are platform buttons (safe zone).
-        return layout_filter(cfg, info, "center", shot["cx"], None, inp, out, face_at=FACE_X / W)
+        # Face left of centre (the right ~160 px are platform buttons), and only the top 90% of the
+        # frame: shows put their logo in the bottom corner, which a full-height crop cut in half.
+        sw, sh = info["width"], info["height"]
+        ch = even(sh * FACE_CROP_H)
+        cw = min(sw, even(ch * W / H))
+        x = int(min(max(shot["cx"] * sw - cw * FACE_X / W, 0), sw - cw))
+        return f"[{inp}]crop={cw}:{ch}:{x}:0,scale={W}:{H},setsar=1[{out}]"
     if shot["kind"] == "duo":
         ph = H // 2
         (lw, lh, lx, ly), (rw, rh, rx, ry) = duo_panels(shot, info, W / ph)
@@ -486,6 +505,36 @@ def first_silence(audio_fn, t0: float, t1: float, sr: int = 16000, min_len: floa
     return None
 
 
+def silence_runs(audio_fn, t0: float, t1: float, min_len: float = 0.06, sr: int = 16000) -> list[tuple[float, float]]:
+    """Silent stretches (20 ms RMS < SILENCE_DB) of at least min_len inside [t0, t1]."""
+    import numpy as np
+    if audio_fn is None or t1 - t0 < min_len:
+        return []
+    a = audio_fn(t0, t1 - t0)
+    win, hop = int(0.02 * sr), int(0.005 * sr)
+    quiet = [20 * np.log10(np.sqrt(np.mean(a[i:i + win] ** 2)) + 1e-9) < SILENCE_DB
+             for i in range(0, max(len(a) - win, 0) + 1, hop)]
+    runs, k = [], 0
+    while k < len(quiet):
+        if quiet[k]:
+            j = k
+            while j < len(quiet) and quiet[j]:
+                j += 1
+            a_, b_ = t0 + k * hop / sr, t0 + ((j - 1) * hop + win) / sr
+            if b_ - a_ >= min_len:
+                runs.append((a_, b_))
+            k = j
+        else:
+            k += 1
+    return runs
+
+
+def level_db(audio_fn, t0: float, dur: float) -> float:
+    import numpy as np
+    a = audio_fn(t0, dur)
+    return float(20 * np.log10(np.sqrt(np.mean(a ** 2)) + 1e-9)) if len(a) else -99.0
+
+
 def snap_to_words(words: list[dict], start: float, end: float, sentence_end: bool = False,
                   max_trim: float | None = None, audio_fn=None, timed: list[dict] | None = None,
                   end_tol: float = 0.3) -> tuple[float, float]:
@@ -545,7 +594,19 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
         q = quietest(audio_fn, last["e"], last["e"] + 0.3 if nxt is None else min(last["e"] + 0.3, nxt["s"] + 0.1))
     if q is not None:
         e1 = q
-    return round(min(s0, first["s"]), 3), round(max(e1, last["e"]), 3)
+    s0, e1 = min(s0, first["s"]), max(e1, last["e"])
+    if audio_fn is not None:
+        # Safety net for wrong Whisper times: a cut must sit in silence. A loud start moves back
+        # to the end of the nearest pause (<= 0.8 s), a loud end forward to the next pause.
+        if level_db(audio_fn, s0, 0.03) > SILENCE_DB:
+            runs = silence_runs(audio_fn, s0 - 0.8, s0 + 0.02)
+            if runs:
+                s0 = runs[-1][1] - 0.03
+        if level_db(audio_fn, e1 - 0.03, 0.03) > -30.0:
+            runs = silence_runs(audio_fn, e1 - 0.02, e1 + 0.8)
+            if runs:
+                e1 = runs[0][0] + 0.03
+    return round(s0, 3), round(e1, 3)
 
 
 EDGE_CUT = 0.25     # s; camera cuts this close to a segment edge become the edge
@@ -600,6 +661,14 @@ def refine_words(words: list[dict], audio_fn, t0: float, t1: float) -> list[dict
     return out
 
 
+def out_frame_time(t: float, out_fps: float = 0.0) -> float:
+    """ASS time for a picture change at source-frame time t (the subtitles filter runs on source
+    frames, before the 30 fps conversion): floored to the centisecond, minus 5 ms, so the text
+    moves on exactly the first frame of the new shot."""
+    import math
+    return max(0.0, math.floor((t - 0.005) * 100) / 100)
+
+
 def frame_grid(s: float, e: float, info: dict) -> tuple[float, int]:
     """Snap a segment onto the source frame grid: (start on a frame time, whole frame count).
 
@@ -608,9 +677,10 @@ def frame_grid(s: float, e: float, info: dict) -> tuple[float, int]:
     """
     import math
     fps, st = info["fps"], info.get("v_start", 0.0)
-    k = math.ceil((s - st) * fps - 1e-6)
+    # Start rounds down and end rounds up: both move towards the silence around the speech.
+    k = math.floor((s - st) * fps + 1e-6)
     s_q = st + k / fps
-    n = max(1, round((e - s_q) * fps))
+    n = max(1, math.ceil((e - s_q) * fps - 1e-6))
     return s_q, n
 
 
@@ -819,9 +889,10 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 seg_shots.append(plan)
                 for sh in plan:
                     # Output times from the frame-exact source boundaries.
-                    a = off_ + sh["f0"] / info["fps"]
-                    b = off_ + (sh["f1"] / info["fps"] if sh["f1"] is not None else e_ - s_)
-                    shot_spans.append((a, b, sh["kind"]))
+                    # Held edge frames belong to the first/last shot's layout.
+                    a = off_ + (0.0 if sh is plan[0] else sh["f0"] / info["fps"])
+                    b = off_ + (e_ - s_ if sh is plan[-1] else sh["f1"] / info["fps"])
+                    shot_spans.append((out_frame_time(a, rc["fps"]), out_frame_time(b, rc["fps"]), sh["kind"]))
         (cdir / "captions.ass").write_text(build_ass(cfg, clip, segments, layout, shot_spans))
 
         inputs, graph, concat = [], [], ""
@@ -842,7 +913,12 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                     end_opt = "" if sh["f1"] is None else f":end_frame={sh['f1']}"
                     graph.append(f"[s{i}_{j}]trim=start_frame={sh['f0']}{end_opt},setpts=PTS-STARTPTS[t{i}_{j}]")
                     graph.append(shot_filter(cfg, info, sh, f"t{i}_{j}", f"p{i}_{j}"))
-                    graph.append(f"[p{i}_{j}]null{zoom}[l{i}_{j}]")
+                    pad = ""
+                    if sh.get("hold_lead"):
+                        pad += f",tpad=start_mode=clone:start={sh['hold_lead']}"
+                    if sh.get("hold_tail"):
+                        pad += f",tpad=stop_mode=clone:stop={sh['hold_tail']}"
+                    graph.append(f"[p{i}_{j}]null{pad}{zoom}[l{i}_{j}]")
                 graph.append("".join(f"[l{i}_{j}]" for j in range(k)) + f"concat=n={k}:v=1:a=0[l{i}]")
             else:
                 # Each segment gets its own face track (the cold open lies outside the main range).
@@ -856,7 +932,8 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             graph.append(f"[{i}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
                          f"apad=whole_dur={nframes[i] / fps:.6f}[a{i}]")
             concat += f"[l{i}][a{i}]"
-        audio = ",loudnorm=I=-14:TP=-1.5:LRA=11" if rc["loudnorm"] else ""
+        # loudnorm alone let true peaks reach -0.7 dBFS; the limiter keeps samples under -2 dBFS.
+        audio = ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=192000,alimiter=limit=0.79:level=false:attack=1:release=50,aresample=48000" if rc["loudnorm"] else ""
         graph.append(f"{concat}concat=n={len(segments)}:v=1:a=1[cv][ca0]")
         from .memes import pick_effects, meme_filter_chain
         meme_fx = pick_effects(cfg, clip)
@@ -891,6 +968,16 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         run([tool("ffmpeg"), "-v", "error", "-y", "-ss", min(3.0, (clip["end"] - clip["start"]) / 2),
              "-i", out.name, "-frames:v", "1", "-q:v", "3", "preview.jpg"], cwd=cdir)
         write_json(cdir / "clip.json", clip)
+        from .qa import run_all
+        problems = run_all(cfg, cdir, audio_fn, [(e_, off_ + e_ - s_) for s_, e_, off_ in segments],
+                           [(s_, off_) for s_, e_, off_ in segments])
+        if problems:
+            # Known defect types never reach the reviewer: the clip stays out of the queue.
+            log(f"  QA FAILED {clip['id']} ({len(problems)}), see qa.txt:")
+            for p_ in problems[:8]:
+                log(f"    {p_}")
+            continue
+        log("  QA ok")
         review_queue.add(cfg, clip, source, out)
         outputs.append(out)
         log(f"rendered {clip['id']} ({sum(e - s for s, e, _ in segments):.1f}s, cold open: {len(segments) > 1}, layout: {layout})")
