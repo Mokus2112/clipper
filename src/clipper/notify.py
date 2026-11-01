@@ -51,7 +51,9 @@ def current_keyboard(cfg: dict) -> str:
     """Keyboard for the current queue state, or remove_keyboard when nothing needs a decision."""
     items = review_queue.load(cfg)
     pending = [i["id"] for i in items if i["status"] == "pending"]
-    private = [i["id"] for i in items if i["status"] == "uploaded" and i.get("privacy") != "public"]
+    # superseded: an uploaded clip replaced by a better render; never offer it for publishing.
+    private = [i["id"] for i in items if i["status"] == "uploaded" and i.get("privacy") != "public"
+               and not i.get("superseded_by")]
     if not pending and not private:
         return json.dumps({"remove_keyboard": True})
     return review_keyboard(pending, private)
