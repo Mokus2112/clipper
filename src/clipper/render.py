@@ -172,6 +172,8 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
         words = [w for w in clip.get("words", []) if w["s"] >= seg_s - 0.05 and w["e"] <= seg_e + 0.05]
         for chunk in chunk_words(words, cc["max_words"], cc["max_chunk_sec"]):
             texts = [ass_escape(w["w"].upper() if cc["uppercase"] else w["w"]) for w in chunk]
+            pop = cc.get("pop", 1.0)
+            pop_tag = f"{{\\fscx{int(pop*100)}\\fscy{int(pop*100)}\\t(0,80,\\fscx100\\fscy100)}}" if pop > 1.0 else ""
             for i, w in enumerate(chunk):
                 t0 = w["s"] if i else chunk[0]["s"]
                 t1 = chunk[i + 1]["s"] if i + 1 < len(chunk) else chunk[-1]["e"]
@@ -182,7 +184,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
                          for j, t in enumerate(texts)]
                 lines.append(
                     f"Dialogue: 0,{ass_time(t0 - seg_s + off)},{ass_time(t1 - seg_s + off)},Cap,,0,0,0,,"
-                    f"{{\\pos({W // 2},{y})}}{' '.join(parts)}"
+                    f"{{\\pos({W // 2},{y})}}{pop_tag}{' '.join(parts)}"
                 )
     return "\n".join(lines) + "\n"
 

@@ -69,6 +69,7 @@ captions:
   y_center: 1260           # caption baseline in center layout (keeps clear of Shorts UI)
   y_split: 820             # caption position in split layout (just under the seam)
   y_fit: 1420              # fit layout: below the centred frame, still above the platforms' caption area
+  pop: 1.12                # scale factor for word pop-in animation (1.0 = disabled)
 
 hook:
   enabled: true
