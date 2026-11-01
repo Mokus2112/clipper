@@ -191,6 +191,9 @@ def check_caption_sync(video: Path, ass: Path) -> list[str]:
             continue
         if min(starts, key=lambda s: abs(s - o)) != t:
             continue
+        ti = int(round(t / 0.01))
+        if ti >= 15 and speech[ti - 12:ti - 2].any():
+            continue  # the highlight sits inside continuous speech, so the onset is another sound
         if abs(t - o) > 0.08:
             bad.append(f"caption sync: word lights up at {t:.2f}s, audio onset {o:.2f}s ({(t - o) * 1000:+.0f} ms)")
     seen = set()
