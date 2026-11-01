@@ -97,8 +97,9 @@ def probe(path: Path) -> dict:
 def remove_source(jd: Path) -> int:
     """Delete the downloaded VOD (or the symlink to a local file) of a job; returns bytes freed."""
     freed = 0
-    for p in list(jd.glob("source.*")) + list(jd.glob("*.live_chat.json")):
-        if not p.is_symlink():
+    # source.live_chat.json matches both patterns: dedupe, and tolerate already-missing files.
+    for p in sorted(set(jd.glob("source.*")) | set(jd.glob("*.live_chat.json"))):
+        if not p.is_symlink() and p.exists():
             freed += p.stat().st_size
-        p.unlink()
+        p.unlink(missing_ok=True)
     return freed
