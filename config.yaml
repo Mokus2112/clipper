@@ -26,7 +26,7 @@ detect:
 
 whisper:
   full_model: base    # fast pass over the whole VOD, used to find stories
-  clip_model: small   # accurate word timestamps for the selected clips (captions)
+  clip_model: medium  # word timestamps for the selected clips (captions); small was ~0.2 s off mid-speech
   chunk_sec: 600      # full pass works in chunks to keep memory flat
   language: null      # null = auto-detect
   threads: 4

@@ -184,7 +184,7 @@ def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam:
 SCENE_CUT_SCORE = 4.0   # scdet score; real camera cuts score ~10, in-shot motion stays below 1
 MIN_SHOT = 0.5          # s, shorter shots are merged into the previous one
 DUO_MIN_SEP = 0.25
-FACE_MIN_W = 0.07       # face crop only for close-ups (face >= 7% of frame width)      # two faces at least this far apart (fraction of width) -> stacked duo layout
+FACE_MIN_W = 0.0        # 0 = always face-crop a single person; fit puts edge faces in the button column      # two faces at least this far apart (fraction of width) -> stacked duo layout
 
 
 def scene_cuts(video: Path, start: float, dur: float) -> list[tuple[float, int]]:
@@ -293,7 +293,7 @@ def plan_shots(video: Path, info: dict, start: float, end: float) -> list[dict]:
                     cx = median(centres)
                 # A small face (wide shot) blown up to 9:16 is visibly soft: show the frame instead.
                 fws = [b[2] for f in with_faces for b in f]
-                if median(fws) < FACE_MIN_W:
+                if FACE_MIN_W and median(fws) < FACE_MIN_W:
                     shot.update(kind="fit")
                 else:
                     shot.update(kind="face", cx=cx)
@@ -461,16 +461,28 @@ def quietest(audio_fn, t0: float, t1: float, sr: int = 16000) -> float | None:
     return t0 + (k * hop + win / 2) / sr
 
 
-def first_silence(audio_fn, t0: float, t1: float, sr: int = 16000) -> float | None:
-    """Start (+30 ms) of the first 20 ms window below SILENCE_DB in [t0, t1], or None."""
+def first_silence(audio_fn, t0: float, t1: float, sr: int = 16000, min_len: float = 0.06) -> float | None:
+    """Start (+30 ms) of the first silence of at least min_len in [t0, t1], or None.
+
+    min_len skips the short closures inside words ("don't know" has a ~30 ms gap), which a single
+    20 ms window would mistake for the end of speech.
+    """
     import numpy as np
     if audio_fn is None or t1 - t0 < 0.03:
         return None
-    a = audio_fn(t0, t1 - t0)
+    a = audio_fn(t0, t1 - t0 + min_len)
     win, hop = int(0.02 * sr), int(0.005 * sr)
-    for i in range(0, max(len(a) - win, 0) + 1, hop):
-        if 20 * np.log10(np.sqrt(np.mean(a[i:i + win] ** 2)) + 1e-9) < SILENCE_DB:
-            return t0 + i / sr + 0.03
+    quiet = [20 * np.log10(np.sqrt(np.mean(a[i:i + win] ** 2)) + 1e-9) < SILENCE_DB
+             for i in range(0, max(len(a) - win, 0) + 1, hop)]
+    need = max(1, int((min_len - 0.02) / 0.005) + 1)
+    run = 0
+    for k, q in enumerate(quiet):
+        run = run + 1 if q else 0
+        if run >= need:
+            start = (k - run + 1) * hop / sr
+            if start > t1 - t0:
+                return None
+            return t0 + start + 0.03
     return None
 
 
@@ -525,9 +537,12 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
     limit = last["e"] + 0.3 if nxt is None else min(last["e"] + 0.3, nxt["e"] - 0.1)
     # End at the first silence after the last word (the next sentence can start 100 ms later and
     # Whisper's next-word start is unreliable); fall back to the quietest point.
-    q = first_silence(audio_fn, last["e"], last["e"] + 0.35)
+    # Search no further than the next word's end: past that, the next sentence is surely playing.
+    hi = last["e"] + 0.35 if nxt is None else min(last["e"] + 0.35, nxt["e"] - 0.05)
+    q = first_silence(audio_fn, last["e"], hi)
     if q is None:
-        q = quietest(audio_fn, last["e"], limit)
+        # Connected speech: cut at the quietest point before the next word really starts.
+        q = quietest(audio_fn, last["e"], last["e"] + 0.3 if nxt is None else min(last["e"] + 0.3, nxt["s"] + 0.1))
     if q is not None:
         e1 = q
     return round(min(s0, first["s"]), 3), round(max(e1, last["e"]), 3)
@@ -667,7 +682,9 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
                     f"{{\\pos({CAP_X},{hook_y.get(kind, hc['y'])})}}{ass_escape(clip['hook'])}"
                 )
     for seg_s, seg_e, off in segments:
-        words = [w for w in caption_words(clip.get("words", [])) if w["s"] >= seg_s - 0.05 and w["e"] <= seg_e + 0.05]
+        # A word is captioned only if its middle is inside the segment (no half-heard word at a cut).
+        words = [w for w in caption_words(clip.get("words", []))
+                 if seg_s <= (w["s"] + w["e"]) / 2 <= seg_e]
         for chunk in chunk_words(words, cc["max_words"], cc["max_chunk_sec"]):
             texts = [ass_escape(censor(w["w"].upper() if cc["uppercase"] else w["w"])) for w in chunk]
             pop = cc.get("pop", 1.0)
@@ -773,6 +790,16 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             cuts = [f for _, f in scene_cuts(video, s_, e_ - s_)]
             lead = max([f for f in cuts if 0 < f <= edge], default=0)
             tail = min([f for f in cuts if n - edge <= f < n], default=n)
+            fps = info["fps"]
+
+            def speech_in(a: float, b: float) -> bool:
+                return any(w["s"] < b and w["e"] > a for w in words)
+            # Trimming more than a 2-frame flash must not cut speech (a camera cut on the last word
+            # took "know" off "I actually don't know."); keep those frames as a quick cut instead.
+            if lead > 2 and speech_in(s_, s_ + lead / fps):
+                lead = 0
+            if n - tail > 2 and speech_in(s_ + tail / fps, s_ + n / fps):
+                tail = n
             if lead or tail < n:
                 log(f"  segment {k}: trimmed {lead} lead / {n - tail} tail frames at camera cuts")
             s_ = s_ + lead / info["fps"]

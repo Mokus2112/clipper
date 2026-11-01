@@ -42,6 +42,7 @@ Hard rules:
 - title: under 70 characters, curiosity-driven, includes the streamer name.
 - story: one sentence, "setup -> payoff".
 - caption: one short line for TikTok/Instagram, under 100 characters, curiosity-driven, may differ from the title.
+  The same rule as for hook/title: no allegations about real people stated as fact.
 - hashtags: 3-5 relevant lowercase hashtags without "#" (streamer name first, no generic spam like fyp/viral).
 - score: 1-10 for Shorts potential. Be harsh: 5 = average, 7 = clearly good, 9 = viral. Only return clips scoring 7+.
   Test: would a stranger scrolling past stop within 1 second, and would they share it? Mild jokes, food reviews,
