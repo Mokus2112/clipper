@@ -309,7 +309,7 @@ def check_repeated_words(video: Path, ass: Path) -> list[str]:
     return sorted(set(problems))
 
 
-def check_uncaptioned_speech(video: Path, ass: Path, thr_db: float = -35.0, min_len: float = 0.15) -> list[str]:
+def check_uncaptioned_speech(video: Path, ass: Path, thr_db: float = -35.0, min_len: float = 0.3) -> list[str]:
     """Speech (RMS above thr_db for min_len) with no caption line on screen."""
     from .transcribe import load_audio
     a = load_audio(video, 0.0, _duration(video))
@@ -328,6 +328,18 @@ def check_uncaptioned_speech(video: Path, ass: Path, thr_db: float = -35.0, min_
             i = j
         else:
             i += 1
+    from faster_whisper import WhisperModel
+    segs, _ = WhisperModel("small", device="cpu", compute_type="int8").transcribe(a, language="en", word_timestamps=True)
+    spans = []  # whisper words with no caption on screen, merged when adjacent
+    for sg in segs:
+        for w in (sg.words or []):
+            i0, i1 = int(w.start * 100), int(w.end * 100) + 1
+            if i1 - i0 >= 3 and not covered[i0:i1].any():
+                if spans and w.start - spans[-1][1] < 0.15:
+                    spans[-1][1] = w.end
+                else:
+                    spans.append([w.start, w.end])
+    out += [f"{a0:.2f}-{b0:.2f}(whisper)" for a0, b0 in spans if b0 - a0 >= 0.3]
     return [f"speech without caption at {', '.join(out[:6])}"] if out else []
 
 
