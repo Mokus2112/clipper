@@ -298,9 +298,16 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         meme_fx = pick_effects(cfg, clip)
         W, H = rc["width"], rc["height"]
         if meme_fx:
-            graph.append(meme_filter_chain(meme_fx, "cv", "cv_fx", W, H))
+            # Payoff moment inside the main segment, in output-timeline seconds.
+            ms, me, moff = segments[-1]
+            ps = clip.get("payoff_start")
+            window = None
+            if ps is not None and ms <= ps < me:
+                pe = min(clip.get("payoff_end") or ps + 1.5, me)
+                window = (moff + ps - ms, moff + pe - ms)
+            graph.append(meme_filter_chain(meme_fx, "cv", "cv_fx", W, H, window))
             cap_in = "cv_fx"
-            log(f"  meme effects: {meme_fx}")
+            log(f"  meme effects: {meme_fx} at {window}")
         else:
             cap_in = "cv"
         graph.append(f"[{cap_in}]subtitles=captions.ass:fontsdir={fonts}[v]")

@@ -178,8 +178,9 @@ def refresh(cfg: dict) -> dict:
             urls = fetch_channel_shorts(ch_url, n_shorts)
             log(f"memes: {ch_url} -> {len(urls)} shorts")
             for url in urls:
-                item_dir = tmp / url.split("=")[-1]
-                item_dir.mkdir(exist_ok=True)
+                vid = url.rstrip("/").split("/")[-1]
+                item_dir = tmp / vid
+                item_dir.mkdir(parents=True, exist_ok=True)
                 video = _download_preview(url, item_dir)
                 if not video:
                     continue
@@ -188,7 +189,7 @@ def refresh(cfg: dict) -> dict:
                 label = _ask_claude_effect(cfg, transcript, reaction, music, item_dir)
                 if label:
                     labels.append(label)
-                    log(f"memes: {url.split('=')[-1]} -> {label}")
+                    log(f"memes: {vid} -> {label}")
 
     scores = _cluster(labels, len(labels))
     lib = {
@@ -225,21 +226,37 @@ def pick_effects(cfg: dict, clip: dict) -> list[str]:
     return [e for e, _ in ranked[:max_n]]
 
 
-def meme_filter_chain(effects: list[str], node_in: str, node_out: str, W: int, H: int) -> str:
-    """Build an ffmpeg filter chain string for the given effects."""
-    if not effects:
+def meme_filter_chain(effects: list[str], node_in: str, node_out: str, W: int, H: int,
+                      window: tuple[float, float] | None = None) -> str:
+    """ffmpeg filter graph applying the effects only inside `window` (output-timeline seconds).
+
+    Effects are meme accents on the payoff moment, never on the whole clip. Without a window
+    nothing is applied.
+    """
+    if not effects or window is None:
         return f"[{node_in}]null[{node_out}]"
-    filters = []
-    for ef in effects:
+    a, b = window
+    b = max(b, a + 0.8)
+    on = f"between(t,{a:.2f},{b:.2f})"
+    parts, cur = [], node_in
+    for i, ef in enumerate(effects):
+        nxt = node_out if i == len(effects) - 1 else f"fx{i}"
         if ef == "zoom":
-            filters.append(f"scale={int(W * 1.05)}:{int(H * 1.05)},crop={W}:{H}:{int(W * 0.025)}:{int(H * 0.025)}")
+            parts.append(f"[{cur}]split[fxm{i}][fxe{i}]")
+            parts.append(f"[fxe{i}]scale={int(W * 1.12) // 2 * 2}:{int(H * 1.12) // 2 * 2},crop={W}:{H}[fxz{i}]")
+            parts.append(f"[fxm{i}][fxz{i}]overlay=0:0:enable='{on}'[{nxt}]")
         elif ef == "shake":
-            filters.append(f"crop=iw-20:ih-20:10+5*sin(t*25):5+5*cos(t*17),scale={W}:{H}")
+            parts.append(f"[{cur}]split[fxm{i}][fxe{i}]")
+            parts.append(f"[fxe{i}]scale={W + 48}:{H + 48},crop={W}:{H}:24+16*sin(t*41):24+16*cos(t*33)[fxz{i}]")
+            parts.append(f"[fxm{i}][fxz{i}]overlay=0:0:enable='{on}'[{nxt}]")
         elif ef == "flash":
-            filters.append("fade=t=in:st=0:d=0.12:color=white")
+            parts.append(f"[{cur}]drawbox=x=0:y=0:w=iw:h=ih:color=white@0.85:t=fill"
+                         f":enable='between(t,{a:.2f},{a + 0.12:.2f})'[{nxt}]")
         elif ef == "red":
-            filters.append("colorchannelmixer=rr=1.5:rg=0.1:rb=0.1:gr=0:gg=0.65:gb=0:br=0:bg=0:bb=0.6")
+            parts.append(f"[{cur}]colorchannelmixer=rr=1.4:rg=0.1:rb=0.1:gg=0.6:bb=0.6:enable='{on}'[{nxt}]")
         elif ef == "bw":
-            filters.append("hue=s=0")
-    chain = ",".join(filters)
-    return f"[{node_in}]{chain}[{node_out}]"
+            parts.append(f"[{cur}]hue=s=0:enable='{on}'[{nxt}]")
+        else:
+            parts.append(f"[{cur}]null[{nxt}]")
+        cur = nxt
+    return ";".join(parts)
