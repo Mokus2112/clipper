@@ -131,44 +131,45 @@ sources:
 
     credit: "Credit: IShowSpeed (https://www.youtube.com/@IShowSpeed)"
 
-  # Whop Content Rewards campaigns (active -- check contentrewards.com/campaigns for rule updates)
-  - name: reach-kai
-    streamer: Kai Cenat
-    channel_url: https://www.youtube.com/@KaiCenatLive
-    campaign_url: https://whop.com/content-rewards/  # TODO: confirm exact campaign URL with Badi
-    layout: auto
-    tags: [kaicenat, kai, stream, clips]
-    credit: "Credit: Kai Cenat (https://www.youtube.com/@KaiCenatLive)"
-    required_text: ""   # check campaign brief for required tags/mentions
+  # Whop Content Rewards campaigns. Checked 2026-11-01 on contentrewards.com/campaigns.
+  # Reach Kai campaign ended 2026-10-31 (no longer listed), source removed.
+  # title_prefix: always prepended to the title; title_mention: prepended as "<name>: " if missing.
 
+  # Reach, $30K pool, rules: https://reachclipping.com/Lacy
+  # Pool payout needs 1,000,000 total approved views (MVR). One strike, no AI content, no logos,
+  # >=50% audience in US/CA/AU/UK/NZ, submit within 30 min of posting.
   - name: reach-lacy
     streamer: Lacy
     channel_url: https://www.youtube.com/@Lacy
-    campaign_url: https://whop.com/content-rewards/  # TODO: confirm exact campaign URL with Badi
+    campaign_url: https://contentrewards.com/campaigns/4479e5e2-9a00-489e-8b0c-345834f37cc7
     layout: auto
     tags: [lacy, stream, clips]
-    credit: "Credit: Lacy"
-    required_text: ""
+    credit: "Credit: Lacy (https://www.youtube.com/@Lacy)"
+    title_mention: Lacy
+    required_text: "#Lacy"
 
+  # Scapeworld Entertainment, $1.50 CPM, max $150/clip, TikTok + YouTube Shorts only.
+  # Every approved example starts with an "Ad:" disclosure. Source: Scape gameplay streams
+  # (free demo / Early Access, https://store.steampowered.com/app/4678630/Scape). No single channel.
   - name: scape-gravity
-    streamer: Scape Gravity
-    channel_url: ""   # gaming streams -- fill in correct channel
-    campaign_url: https://whop.com/content-rewards/?campaignId=8553875d
+    streamer: Scape
+    channel_url: ""   # TODO: pick a streamer VOD with Scape gameplay per run (fetch <url>)
+    campaign_url: https://contentrewards.com/campaigns/8553875d-dfb0-4a97-aea5-448008876e46
     layout: auto
-    tags: [gaming, stream, clips]
-    credit: ""
-    required_text: ""
-    # $1.50 CPM, gaming streams campaign id: 8553875d
+    tags: [scape, gaming, climbinggame]
+    credit: "Scape on Steam: https://store.steampowered.com/app/4678630/Scape"
+    title_prefix: "Ad: Scape -"
+    required_text: "#ad #Scape"
 
+  # Clip Farm, $1.25 CPM, YouTube + Instagram, ~$9K budget left of $20K.
   - name: clipfarm-solved
     streamer: Solved w/ Mark Manson
     channel_url: https://www.youtube.com/@MarkManson
-    campaign_url: https://whop.com/content-rewards/?campaignId=6bdc8e4b
+    campaign_url: https://contentrewards.com/campaigns/6bdc8e4b-3ebf-44f1-aedb-067589ca9c89
     layout: fit   # podcast/talking head
-    tags: [markmanson, podcast, motivation]
+    tags: [markmanson, podcast, selfimprovement]
     credit: "Credit: Mark Manson (https://www.youtube.com/@MarkManson)"
     required_text: ""
-    # campaign id: 6bdc8e4b
 
   # Practice sources: overnight pipeline evaluation only, never uploaded.
   - name: practice-kai
