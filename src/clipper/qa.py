@@ -309,6 +309,28 @@ def check_repeated_words(video: Path, ass: Path) -> list[str]:
     return sorted(set(problems))
 
 
+def check_uncaptioned_speech(video: Path, ass: Path, thr_db: float = -35.0, min_len: float = 0.15) -> list[str]:
+    """Speech (RMS above thr_db for min_len) with no caption line on screen."""
+    from .transcribe import load_audio
+    a = load_audio(video, 0.0, _duration(video))
+    db = _db_curve(a)  # 10 ms hop
+    covered = np.zeros(len(db), bool)
+    for s0, e0, _w in _highlights(ass):
+        covered[int(s0 * 100):int(e0 * 100) + 1] = True
+    out, i = [], 0
+    while i < len(db):
+        if db[i] > thr_db and not covered[i]:
+            j = i
+            while j < len(db) and db[j] > thr_db and not covered[j]:
+                j += 1
+            if (j - i) / 100 >= min_len:
+                out.append(f"{i / 100:.2f}-{j / 100:.2f}")
+            i = j
+        else:
+            i += 1
+    return [f"speech without caption at {', '.join(out[:6])}"] if out else []
+
+
 def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, float]],
             source_starts: list[tuple[float, float]] = ()) -> list[str]:
     video = cdir / "short.mp4"
@@ -324,5 +346,6 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
     problems += check_caption_sync(video, cdir / "captions.ass")
     problems += check_caption_words(video, cdir / "captions.ass")
     problems += check_repeated_words(video, cdir / "captions.ass")
+    problems += check_uncaptioned_speech(video, cdir / "captions.ass")
     (cdir / "qa.txt").write_text("\n".join(problems) + "\n" if problems else "ok\n")
     return problems
