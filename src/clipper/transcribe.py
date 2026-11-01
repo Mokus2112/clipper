@@ -85,7 +85,12 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
             qe = find_quote(words, quotes.get("end_quote", ""), near=clip["end"],
                             lo=words[qs[0]]["s"] if qs else None) if qs else None
             if qs and qe:
-                clip["start"], clip["end"] = words[qs[0]]["s"], words[qe[1]]["e"]
+                i0 = qs[0]
+                # The ranker picks sentence starts on the punctuated transcript. Word-level
+                # punctuation from Whisper is too unreliable to move the start automatically.
+                if i0 > 0 and not words[i0 - 1]["w"].rstrip("\"'”’)").endswith((".", "?", "!")):
+                    log(f"{clip['id']}: note: no sentence end before the start quote in the word transcript")
+                clip["start"], clip["end"] = words[i0]["s"], words[qe[1]]["e"]
             if clip.get("payoff_start") is not None:
                 qp = find_quote(words, quotes.get("payoff_quote", ""), near=clip["payoff_start"],
                                 lo=clip["start"] - 0.5, hi=clip["end"] + 0.5)
@@ -95,10 +100,12 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
                     # preferring to start right after a comma: "..., nobody knows who pooped in the bed."
                     while words[i1]["e"] - words[i0]["s"] > 3.5 and i0 < i1:
                         i0 += 1
-                    for j in range(qp[0], i0 + 1):
-                        if words[j]["w"].endswith(",") and j + 1 <= i1 and words[i1]["e"] - words[j + 1]["s"] <= 3.5:
-                            i0 = j + 1
-                            break
+                    if i0 != qp[0]:
+                        # Trimmed: start after the first comma that leaves <= 3.5 s, if any.
+                        for j in range(qp[0], i1):
+                            if words[j]["w"].endswith(",") and words[i1]["e"] - words[j + 1]["s"] <= 3.5:
+                                i0 = j + 1
+                                break
                     clip["payoff_start"], clip["payoff_end"] = words[i0]["s"], words[i1]["e"]
             log(f"{clip['id']}: quotes start={'ok' if qs else 'MISS'} end={'ok' if qe else 'MISS'}")
             log(f"{clip['id']}: {len(words)} words, {clip['end'] - clip['start']:.1f}s")

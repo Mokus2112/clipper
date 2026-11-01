@@ -25,6 +25,7 @@ Hard rules:
 - The clip must START at the beginning of a sentence and END at the end of a sentence (never mid-sentence,
   never on a dangling "and"/"so"/"I mean"). The first sentence must make sense to a stranger on its own.
 - start_quote: the first 5-8 words of the clip, copied EXACTLY from the transcript (same words, same order).
+  It must be the beginning of a full sentence: the transcript text right before it ends with . ? or !
 - end_quote: the last 5-8 words of the clip, copied EXACTLY from the transcript, ending a sentence.
 - payoff_quote: the payoff as a short complete phrase or sentence (3-10 words), copied EXACTLY from the
   transcript, inside the clip. It must be understandable as the first thing a viewer hears.

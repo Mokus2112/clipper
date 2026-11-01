@@ -262,7 +262,9 @@ def plan_shots(video: Path, info: dict, start: float, end: float) -> list[dict]:
                     if (r[0] + r[2] / 2) - (l[0] + l[2] / 2) >= DUO_MIN_SEP:
                         pairs.append((l, r))
             duo = None
-            if len(pairs) * 2 >= len(with_faces):
+            # Duo only if both people are visible nearly all the time: a person leaning out of
+            # frame for a second leaves an empty panel.
+            if len(pairs) >= 0.8 * len(samples):
                 cxs = lambda k: [p[k][0] + p[k][2] / 2 for p in pairs]  # noqa: E731
                 duo = {"kind": "duo",
                        "left": tuple(median([p[0][i] for p in pairs]) for i in range(4)),
@@ -276,8 +278,17 @@ def plan_shots(video: Path, info: dict, start: float, end: float) -> list[dict]:
             if duo:
                 shot.update(duo)
             else:
-                main = [max(f, key=lambda b: b[2] * b[3]) for f in with_faces]
-                shot.update(kind="face", cx=median([b[0] + b[2] / 2 for b in main]))
+                # Face crop on the person who is visible most of the shot (largest-face-per-frame
+                # can flip between two people and put the crop in the empty middle).
+                centres = [b[0] + b[2] / 2 for f in with_faces for b in f]
+                if max(centres) - min(centres) > DUO_MIN_SEP:
+                    left = [c for c in centres if c < 0.5]
+                    right = [c for c in centres if c >= 0.5]
+                    side = left if len(left) > len(right) else right
+                    cx = median(side)
+                else:
+                    cx = median(centres)
+                shot.update(kind="face", cx=cx)
         shots.append(shot)
     cap.release()
     return shots
