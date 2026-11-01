@@ -166,6 +166,27 @@ sources:
       signs/screen text carry the moment (no Japanese text may appear in captions or descriptions).
       Avoid moments dominated by brand logos or stream overlay graphics.
 
+  # Reach, $9K pool, rules: https://reachclipping.com/JasonTheWeen
+  # Pool payout needs 700,000 total approved views (MVR). Same Reach rules as Lacy: one strike,
+  # no AI content, no logos, no Japanese text, Jason the focus, never negative.
+  - name: reach-jason
+    streamer: JasonTheWeen
+    channel_url: https://www.youtube.com/@JasonTheWeenie
+    campaign_url: https://contentrewards.com/campaigns/0b178e3c-fbd3-4294-8ded-394e3da9c62f
+    platforms: [youtube, tiktok, instagram, x]   # campaign-allowed platforms (posts.md)
+    layout: auto
+    tags: [jasontheween, jason, stream, clips]
+    credit: "Credit: JasonTheWeen (https://www.youtube.com/@JasonTheWeenie)"
+    title_mention: JasonTheWeen
+    hook_mention: Jason
+    required_text: "#JasonTheWeen"
+    rank_notes: >-
+      Reach campaign rules: JasonTheWeen (Jason) must be the primary focus of the whole clip.
+      Never portray Jason in a negative light, no negative or false narrative, no drama/hate farming.
+      English-speaking audience (US/UK/CA/AU/NZ). Prefer funny moments, memorable quotes and reactions.
+      The hook text MUST contain the name "Jason". No Japanese text in captions or descriptions.
+      Avoid moments dominated by brand logos or overlay graphics.
+
   # Scapeworld Entertainment, $1.50 CPM, max $150/clip, TikTok + YouTube Shorts only.
   # Every approved example starts with an "Ad:" disclosure. Source: Scape gameplay streams
   # (free demo / Early Access, https://store.steampowered.com/app/4678630/Scape). No single channel.
