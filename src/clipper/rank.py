@@ -9,7 +9,7 @@ from .common import find_source, job_dir, log, read_json, tool, write_json
 PROMPT = """You are a top short-form editor who cuts viral streamer clips for YouTube Shorts.
 
 Streamer: {streamer}
-Below is the transcript of a stream VOD. Lines are "[absolute_seconds] text". Lines marked with
+{notes}Below is the transcript of a stream VOD. Lines are "[absolute_seconds] text". Lines marked with
 "<<SPIKE z=...>>" had a loudness/chat-activity spike right there (screaming, laughing, chat going crazy).
 
 Find up to {n} moments that would perform as standalone Shorts. A good clip is a small story:
@@ -114,7 +114,8 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
     for i, part in enumerate(parts):
         log(f"ranking part {i + 1}/{len(parts)} with claude...")
         out = ask_claude(cfg, PROMPT.format(
-            streamer=source["streamer"], n=rc["clips_per_vod"], min_sec=cc["min_sec"],
+            streamer=source["streamer"], n=rc["clips_per_vod"],
+            notes=(f"Campaign rules (hard): {source['rank_notes']}\n" if source.get("rank_notes") else ""), min_sec=cc["min_sec"],
             max_sec=cc["max_sec"] - cfg["render"]["cold_open_max"], transcript="\n".join(part),
         ), jd)
         raw.append(out)
