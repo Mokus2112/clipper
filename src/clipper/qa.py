@@ -208,6 +208,21 @@ def check_caption_sync(video: Path, ass: Path) -> list[str]:
     return bad
 
 
+def check_dead_air(video: Path, max_gap: float = 0.4) -> list[str]:
+    """Silence over max_gap seconds between speech (not at the start or end of the clip)."""
+    from .transcribe import load_audio
+    dur = _duration(video)
+    db = _db_curve(load_audio(video, 0.0, dur))
+    sp = np.flatnonzero(db >= -35.0)
+    if not len(sp):
+        return []
+    out = []
+    for a, b in zip(sp[:-1], sp[1:]):
+        if (b - a) * 0.01 > max_gap:
+            out.append(f"dead air: {(b - a) * 0.01:.2f}s of silence at {a * 0.01 + 0.02:.2f}s inside the speech")
+    return out
+
+
 def check_caption_overlap(ass: Path) -> list[str]:
     hl = sorted(_highlights(ass))
     return [f"caption: two lines on screen at {b[0]:.2f}s" for a, b in zip(hl, hl[1:]) if b[0] < a[1] - 0.005]
@@ -242,6 +257,7 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
     problems += check_true_peak(video)
     problems += check_flashes(video)
     problems += check_caption_durations(cdir / "captions.ass")
+    problems += check_dead_air(video)
     problems += check_caption_overlap(cdir / "captions.ass")
     problems += check_caption_sync(video, cdir / "captions.ass")
     problems += check_caption_words(video, cdir / "captions.ass")

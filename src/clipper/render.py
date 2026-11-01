@@ -666,6 +666,7 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
 
 EDGE_CUT = 0.25     # s; camera cuts this close to a segment edge become the edge
 END_QUIET_DB = -46.0  # last 60 ms of a clip end must be at most this loud
+GAP_MAX, GAP_KEEP = 0.3, 0.1   # internal silences longer than GAP_MAX are cut down to 2 x GAP_KEEP
 SILENCE_DB = -35.0   # 20 ms RMS below this counts as silence for word-timing refinement
 
 
@@ -821,7 +822,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
     ]
     if hc["enabled"] and clip.get("hook"):
         # The hook stays up through the cold open and the first seconds of the setup.
-        cold = segments[0][1] - segments[0][0] if len(segments) > 1 else 0.0
+        cold = clip.get("cold_len", segments[0][1] - segments[0][0] if len(segments) > 1 else 0.0)
         # Per shot like the captions: over the chest on close-ups (the top of the frame is the
         # forehead there), at the top on duo/fit shots.
         hook_y = {"face": hc.get("y_face", hc["y"]), "duo": hc["y"], "fit": hc["y"]}
@@ -909,7 +910,11 @@ def render(cfg: dict, job_id: str) -> list[Path]:
 
     outputs = []
     mc = cfg["music"]
+    import os
+    only = [x for x in os.environ.get("CLIPPER_ONLY", "").split(",") if x]
     for clip in clips:
+        if only and clip["id"] not in only:
+            continue
         clip["music"] = music_ratio(jd, clip["start"], clip["end"], mc["threshold"])
         if clip["music"] is not None and clip["music"] > mc["max_ratio"]:
             log(f"skipping {clip['id']}: music in {clip['music']:.0%} of the clip (Content ID risk)")
@@ -977,6 +982,32 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             trimmed.append((s_, s_ + n / info["fps"], off))
             off += n / info["fps"]
         segments = trimmed
+        # Dead air inside the main segment (a breath cut out of the source leaves digital silence
+        # mid-sentence): drop the middle of any silence over GAP_MAX, keep GAP_KEEP each side.
+        ms_, me_, moff_ = segments[-1]
+        fps = info["fps"]
+        r = round(fps / rc["fps"]) if rc["fps"] and abs(fps / rc["fps"] - round(fps / rc["fps"])) < 0.01 else 1
+        n_main, cuts_f = nframes[-1], []
+        for ga, gb in silence_runs(audio_fn, ms_, me_, min_len=GAP_MAX):
+            if ga - ms_ < 0.25 or me_ - gb < 0.25:
+                continue
+            f0 = -(-int((ga + GAP_KEEP - ms_) * fps) // r) * r
+            f1 = int((gb - GAP_KEEP - ms_) * fps) // r * r
+            if f1 - f0 >= r and (not cuts_f or f0 > cuts_f[-1][1]):
+                cuts_f.append((f0, f1))
+        if cuts_f:
+            subs, pos = [], 0
+            for f0, f1 in cuts_f + [(n_main, n_main)]:
+                if f0 > pos:
+                    subs.append((pos, f0))
+                pos = f1
+            segments, nframes, o = segments[:-1], nframes[:-1], moff_
+            for a_, b_ in subs:
+                segments.append((ms_ + a_ / fps, ms_ + b_ / fps, o))
+                nframes.append(b_ - a_)
+                o += (b_ - a_) / fps
+            log(f"  tightened {len(cuts_f)} internal gaps: {sum(f1 - f0 for f0, f1 in cuts_f) / fps:.2f}s removed")
+        clip = {**clip, "cold_len": segments[0][1] - segments[0][0] if len(raw) > 1 else 0.0}
         layout, cx, cam, track = pick_layout(cfg, source, video, info, main[0], main[1])
         if track:
             log(f"  tracking: {len(track)} face samples")
@@ -1044,8 +1075,8 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         W, H = rc["width"], rc["height"]
         if meme_fx:
             # Payoff moment inside the main segment, in output-timeline seconds.
-            ms, me, moff = segments[-1]
             ps = clip.get("payoff_start")
+            ms, me, moff = next((sg for sg in segments[::-1] if ps is not None and sg[0] <= ps < sg[1]), segments[-1])
             window = None
             if ps is not None and ms <= ps < me:
                 pe = min(clip.get("payoff_end") or ps + 1.5, me)
