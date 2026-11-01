@@ -40,6 +40,32 @@ def send(token: str, args: list[str], method: str) -> bool:
     return ok
 
 
+def review_keyboard(pending_ids: list[str]) -> str:
+    """ReplyKeyboardMarkup with ✅/❌ buttons for every pending clip."""
+    rows = [[f"✅ ok {cid}", f"❌ no {cid}"] for cid in pending_ids]
+    return json.dumps({"keyboard": rows, "resize_keyboard": True, "one_time_keyboard": False})
+
+
+def send_upload_result(cfg: dict, clip_id: str, video_id: str, privacy: str) -> None:
+    """Notify Badi after a successful upload."""
+    token, chat_id = telegram_env(cfg)
+    is_reach = any(
+        s.get("campaign_url", "")
+        for s in cfg.get("sources", [])
+        if s["name"] == clip_id.split("-")[0]
+    )
+    text = f"Feltoltve: https://youtube.com/shorts/{video_id} ({privacy})"
+    if is_reach or any(
+        "reach" in s["name"] for s in cfg.get("sources", [])
+        if s["name"] in clip_id
+    ):
+        text += "\n\nReach kampany: 30 percen belul kuldsd be a Content Rewardsba!"
+    all_pending = [i["id"] for i in review_queue.load(cfg) if i["status"] == "pending"]
+    keyboard_json = review_keyboard(all_pending) if all_pending else json.dumps({"remove_keyboard": True})
+    send(token, ["-d", f"chat_id={chat_id}", "-d", f"text={text}",
+                 "-d", f"reply_markup={keyboard_json}"], "sendMessage")
+
+
 def notify(cfg: dict, clip_ids: list[str] | None = None) -> int:
     token, chat_id = telegram_env(cfg)
     items = [i for i in review_queue.load(cfg)
@@ -52,4 +78,11 @@ def notify(cfg: dict, clip_ids: list[str] | None = None) -> int:
         send(token, ["-F", f"chat_id={chat_id}", "-F", f"text={post_texts(item)}"], "sendMessage")
         review_queue.set_status(cfg, item["id"], item["status"], notified=True)
         log(f"sent {item['id']} to telegram")
+
+    # After all clips are sent, refresh the reply keyboard with all pending clip buttons.
+    all_pending = [i["id"] for i in review_queue.load(cfg) if i["status"] == "pending"]
+    if all_pending:
+        keyboard_json = review_keyboard(all_pending)
+        send(token, ["-d", f"chat_id={chat_id}", "-d", "text=Jovahagyas:",
+                     "-d", f"reply_markup={keyboard_json}"], "sendMessage")
     return len(items)

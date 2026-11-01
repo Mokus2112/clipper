@@ -65,4 +65,7 @@ def upload(cfg: dict, limit: int | None = None) -> list[str]:
                                 uploaded_at=datetime.now().isoformat(timespec="seconds"))
         log(f"uploaded {item['id']} -> https://youtube.com/shorts/{resp['id']} ({uc['privacy']})")
         done.append(resp["id"])
+        if cfg.get("telegram", {}).get("notify"):
+            from .notify import send_upload_result
+            send_upload_result(cfg, item["id"], resp["id"], uc["privacy"])
     return done

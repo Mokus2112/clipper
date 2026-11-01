@@ -83,6 +83,15 @@ def main() -> None:
             status = "approved" if a.cmd == "approve" else "rejected"
             review_queue.set_status(cfg, cid, status)
             print(f"{cid}: {status}")
+        # Refresh keyboard after approve/reject so Badi always sees the current pending list.
+        if cfg.get("telegram", {}).get("notify"):
+            from .notify import send, telegram_env, review_keyboard
+            import json as _json
+            token, chat_id = telegram_env(cfg)
+            remaining = [i["id"] for i in review_queue.load(cfg) if i["status"] == "pending"]
+            keyboard_json = review_keyboard(remaining) if remaining else _json.dumps({"remove_keyboard": True})
+            send(token, ["-d", f"chat_id={chat_id}", "-d", "text=OK.",
+                         "-d", f"reply_markup={keyboard_json}"], "sendMessage")
     elif a.cmd == "upload":
         from .upload import upload
         upload(cfg, a.limit)
