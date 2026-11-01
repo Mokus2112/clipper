@@ -67,6 +67,10 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
 
     m = model(cfg, wc["clip_model"])
     from .anchors import find_quote
+    from .common import find_source
+    src = find_source(cfg, read_json(jd / "job.json")["source"]) or {}
+    # Names in the prompt make Whisper spell them right ("Lacy", not "Lacey").
+    source_names = f"{src['streamer']}. " if src.get("streamer") else ""
     for clip in clips:
         ps = clip.get("payoff_start")
         lo = max(0.0, min(clip["start"], ps if ps is not None else clip["start"]) - 5)
@@ -74,12 +78,20 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
         # The prompt nudges Whisper to keep spoken fillers ("like", "you know", "it's") verbatim;
         # captions that skip words people can hear look machine-made.
         segments, _ = m.transcribe(load_audio(video, lo, hi - lo), word_timestamps=True, vad_filter=True,
-                                   initial_prompt="Um, so, like, you know, I mean, it's, uh, yeah. Verbatim.",
+                                   initial_prompt=f"{source_names}Um, so, like, you know, I mean, it's, uh, yeah. Verbatim.",
                                    language=language)
         words = [
             {"w": w.word.strip(), "s": round(lo + w.start, 2), "e": round(lo + w.end, 2)}
             for seg in segments for w in (seg.words or []) if w.word.strip()
         ]
+        # Whisper's text, forced-aligned times (Whisper word times drift 0.2-0.6 s).
+        from .align import align_words
+        aligned = align_words(words, load_audio(video, lo, hi - lo), lo)
+        if aligned:
+            clip["words_whisper"] = words
+            words = aligned
+        else:
+            log(f"{clip['id']}: forced alignment failed, using Whisper word times")
         clip["words"] = words
         quotes = clip.get("quotes")
         if quotes:
@@ -99,20 +111,30 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
                                 lo=clip["start"] - 0.5, hi=clip["end"] + 0.5)
                 if qp:
                     i0, i1 = qp
-                    # A long payoff is shortened from the front (cold opens work at 1-3.5 s),
-                    # preferring to start right after a comma: "..., nobody knows who pooped in the bed."
-                    while words[i1]["e"] - words[i0]["s"] > 3.5 and i0 < i1:
-                        i0 += 1
-                    if i0 != qp[0]:
-                        # Trimmed: start after the first comma that leaves <= 3.5 s, if any.
-                        for j in range(qp[0], i1):
-                            if words[j]["w"].endswith(",") and words[i1]["e"] - words[j + 1]["s"] <= 3.5:
-                                i0 = j + 1
+                    # A long payoff (> 3.5 s) is shortened from the front, but only at a word that
+                    # follows an audible pause: "To this day, nobody" has no pause before "nobody",
+                    # a cut there leaves "day" audible. Without such a point the whole quote stays (<= 5 s).
+                    if words[i1]["e"] - words[i0]["s"] > 3.5:
+                        from .render import silence_runs
+                        afn = lambda t, d: load_audio(video, t, d)  # noqa: E731
+                        for j in range(qp[0] + 1, i1):
+                            if words[i1]["e"] - words[j]["s"] > 3.5:
+                                continue
+                            if silence_runs(afn, words[j - 1]["e"] - 0.05, words[j]["s"] + 0.05):
+                                i0 = j
                                 break
-                    clip["payoff_start"], clip["payoff_end"] = words[i0]["s"], words[i1]["e"]
+                    if words[i1]["e"] - words[i0]["s"] > 5.0:
+                        log(f"{clip['id']}: payoff too long for a cold open")
+                        i0 = None
+                    if i0 is None:
+                        clip["payoff_start"] = clip["payoff_end"] = None
+                        continue_payoff = False
+                    else:
+                        continue_payoff = True
+                        clip["payoff_start"], clip["payoff_end"] = words[i0]["s"], words[i1]["e"]
                     # Strong profanity in the first seconds risks limited ads: no cold open then.
                     from .render import _PROFANITY
-                    if any(_PROFANITY.search(w["w"]) for w in words[i0:i1 + 1]):
+                    if continue_payoff and any(_PROFANITY.search(w["w"]) for w in words[i0:i1 + 1]):
                         log(f"{clip['id']}: payoff has strong profanity, no cold open")
                         clip["payoff_start"] = clip["payoff_end"] = None
             log(f"{clip['id']}: quotes start={'ok' if qs else 'MISS'} end={'ok' if qe else 'MISS'}")

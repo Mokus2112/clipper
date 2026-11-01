@@ -145,6 +145,80 @@ def check_segment_starts(audio_fn, source_starts: list[tuple[float, float]]) -> 
     return bad
 
 
+FILLERS = {"like", "so", "and", "um", "uh", "yeah", "the", "a", "i", "it's", "you", "know", "just", "oh"}
+
+
+def _highlights(ass: Path) -> list[tuple[float, float, str]]:
+    """(start, end, highlighted word) of every caption line."""
+    def secs(t: str) -> float:
+        h, m, s_ = t.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(s_)
+    out = []
+    for line in ass.read_text().splitlines():
+        if line.startswith("Dialogue: 0,"):
+            p = line.split(",", 9)
+            m = re.search(r"\\c&H0000E0FF\}([^{]+)", p[9])
+            out.append((secs(p[1]), secs(p[2]), m.group(1).strip() if m else ""))
+    return out
+
+
+def _db_curve(a: np.ndarray) -> np.ndarray:
+    return np.array([20 * np.log10(np.sqrt(np.mean(a[i:i + 320] ** 2)) + 1e-9) for i in range(0, max(len(a) - 320, 0), 160)])
+
+
+def check_caption_sync(video: Path, ass: Path) -> list[str]:
+    """Highlights vs audio: a word after a pause lights up within 80 ms of its onset, and no new
+    word lights up while the audio is silent."""
+    from .transcribe import load_audio
+    a = load_audio(video, 0.0, _duration(video))
+    db = _db_curve(a)
+    speech = db >= -35.0
+    onsets = [i * 0.01 for i in range(6, len(speech)) if speech[i] and not speech[i - 6:i].any()]
+    hl = _highlights(ass)
+    bad = []
+    starts = sorted({round(h[0], 2) for h in hl})
+    for o in onsets:
+        near = [t for t in starts if abs(t - o) <= 0.5]
+        if near:
+            t = min(near, key=lambda t: abs(t - o))
+            if abs(t - o) > 0.08:
+                bad.append(f"caption sync: word lights up at {t:.2f}s, audio onset {o:.2f}s ({(t - o) * 1000:+.0f} ms)")
+    seen = set()
+    for s0, _e, w in hl:
+        key = round(s0, 2)
+        if key in seen:
+            continue
+        seen.add(key)
+        i0, i1 = int(max(s0 - 0.05, 0) / 0.01), int((s0 + 0.15) / 0.01)
+        if i1 <= len(db) and i0 < i1 and db[i0:i1].max() < -35.0:
+            bad.append(f"caption sync: '{w}' lights up at {s0:.2f}s during silence")
+    return bad
+
+
+def check_caption_overlap(ass: Path) -> list[str]:
+    hl = sorted(_highlights(ass))
+    return [f"caption: two lines on screen at {b[0]:.2f}s" for a, b in zip(hl, hl[1:]) if b[0] < a[1] - 0.005]
+
+
+def check_caption_words(video: Path, ass: Path) -> list[str]:
+    """Every captioned word (4+ letters, not a filler) must be heard: re-transcribe the output."""
+    from faster_whisper import WhisperModel
+    from .transcribe import load_audio
+    norm = lambda w: re.sub(r"[^a-z0-9']", "", w.lower().replace("*", ""))  # noqa: E731
+    model = WhisperModel("small", device="cpu", compute_type="int8")
+    segs, _ = model.transcribe(load_audio(video, 0.0, _duration(video)), language="en", word_timestamps=True)
+    heard = [(norm(w.word), w.start) for s in segs for w in (s.words or [])]
+    missing = []
+    for s0, _e, w in _highlights(ass):
+        n = norm(w)
+        if len(n) < 4 or n in FILLERS or "*" in w:
+            continue
+        if not any((h == n or h.startswith(n[:4])) and abs(t - s0) <= 1.5 for h, t in heard):
+            missing.append(f"{w}@{s0:.2f}")
+    missing = sorted(set(missing))
+    return [f"caption words not heard in the audio: {', '.join(missing[:8])}"] if len(missing) >= 2 else []
+
+
 def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, float]],
             source_starts: list[tuple[float, float]] = ()) -> list[str]:
     video = cdir / "short.mp4"
@@ -155,5 +229,8 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
     problems += check_true_peak(video)
     problems += check_flashes(video)
     problems += check_caption_durations(cdir / "captions.ass")
+    problems += check_caption_overlap(cdir / "captions.ass")
+    problems += check_caption_sync(video, cdir / "captions.ass")
+    problems += check_caption_words(video, cdir / "captions.ass")
     (cdir / "qa.txt").write_text("\n".join(problems) + "\n" if problems else "ok\n")
     return problems

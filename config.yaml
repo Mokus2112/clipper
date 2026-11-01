@@ -152,7 +152,11 @@ sources:
     channel_url: https://www.youtube.com/@LacyHimself   # US streamer (UCeoZXkaJDtdTHafgoZeDcAA); @Lacy is an unrelated Hungarian channel
     campaign_url: https://contentrewards.com/campaigns/4479e5e2-9a00-489e-8b0c-345834f37cc7
     platforms: [youtube, tiktok, instagram, x]   # campaign-allowed platforms (posts.md)
-    layout: auto
+    layout: center         # IRL/stream: face-tracked crop; fit would show the overlays
+    crop_h: 0.92           # drop the bottom strip (viewer count with Twitch/YouTube icons, sub goal)
+    top_pad: 160           # IRL camera faces sit at the very top: keep them below the top UI zone
+    avoid: [[0.72, 0.0, 0.28, 0.26]]   # chat overlay top right (x, y, w, h fractions)
+    name_fixes: {Lacey: Lacy}
     tags: [lacy, stream, clips]
     credit: "Credit: Lacy (https://www.youtube.com/@LacyHimself)"
     title_mention: Lacy

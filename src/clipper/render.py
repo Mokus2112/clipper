@@ -63,6 +63,15 @@ def _ema_smooth(pts: list[tuple[float, float]], alpha: float,
     return smoothed
 
 
+def _ema_track(pts: list[tuple[float, float]], alpha: float) -> list[tuple[float, float]]:
+    """EMA over (time, cx_frac) pairs; returns smoothed (time, cx_frac)."""
+    out, ema = [], None
+    for t, cx in pts:
+        ema = cx if ema is None else alpha * cx + (1 - alpha) * ema
+        out.append((t, ema))
+    return out
+
+
 def _track_crop_expr(track: list[tuple[float, int]], seg_start: float) -> str:
     """Build an ffmpeg eval expression for the linearly-interpolated crop x offset."""
     if not track:
@@ -137,9 +146,25 @@ def pick_layout(cfg: dict, source: dict, video: Path, info: dict, start: float,
     return "fit", None, None, None
 
 
+def crop_x_bounds(source: dict, sw: int, cw: int, crop_h: float) -> tuple[int, int]:
+    """Allowed crop x range so the crop never shows a source's overlay rects (chat, viewer count,
+    sub goal, logos). Rects are [x, y, w, h] fractions; only rects reaching into the crop height count."""
+    lo, hi = 0, sw - cw
+    for x, y, w, h in source.get("avoid", []):
+        if y >= crop_h:
+            continue  # below the crop (the bottom strip is cut off by crop_h)
+        if x + w / 2 > 0.5:
+            hi = min(hi, int(x * sw) - cw)
+        else:
+            lo = max(lo, int((x + w) * sw))
+    if lo > hi:
+        return 0, sw - cw  # cannot avoid all of them: fall back to the full range
+    return lo, hi
+
+
 def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam: list[float] | None,
                   inp: str, out: str, track: list | None = None, seg_start: float = 0.0,
-                  face_at: float = 0.5) -> str:
+                  face_at: float = 0.5, source: dict | None = None) -> str:
     rc = cfg["render"]
     W, H = rc["width"], rc["height"]
     sw, sh = info["width"], info["height"]
@@ -166,18 +191,34 @@ def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam:
             f"crop={W}:{bot_h}[{out}g];"
             f"[{out}t][{out}g]vstack,setsar=1[{out}]"
         )
-    cw = min(sw, even(sh * W / H))
-    # Dynamic tracking: EMA-smoothed crop expression if we have timed face data.
+    src = source or {}
+    # Source options for IRL/stream footage: crop_h drops the bottom strip (viewer count, sub goal),
+    # avoid keeps overlay rects out of the crop, top_pad moves a face that sits at the very top of the
+    # camera image below the top UI zone (the pad shows a blurred copy of the crop).
+    crop_h = src.get("crop_h", 1.0)
+    top_pad = int(src.get("top_pad", 0))
+    ch = even(sh * crop_h)
+    fg_h = H - top_pad
+    cw = min(sw, even(ch * W / fg_h))
+    lo, hi = crop_x_bounds(src, sw, cw, crop_h)
+    face_at = face_at if source is None else FACE_X / W  # campaign sources: keep the face clear of the buttons
     rc = cfg["render"]
     if track and rc.get("track_face", False):
-        smoothed = _ema_smooth(track, rc.get("track_alpha", 0.15), sw, cw)
+        smoothed = [(t, int(min(max(cxf * sw - cw * face_at, lo), hi)))
+                    for t, cxf in _ema_track(track, rc.get("track_alpha", 0.15))]
         x_expr = _track_crop_expr(smoothed, seg_start)
     else:
         center = (cx if cx is not None else 0.5) * sw
         # face_at: where the face lands across the output width (0.5 = middle).
-        x_expr = str(int(min(max(center - cw * face_at, 0), sw - cw)))
+        x_expr = str(int(min(max(center - cw * face_at, lo), hi)))
     # Quoted: the tracking expression contains commas, which would otherwise split the filter chain.
-    return f"[{inp}]crop=w={cw}:h={sh}:x='{x_expr}':y=0,scale={W}:{H},setsar=1[{out}]"
+    crop = f"crop=w={cw}:h={ch}:x='{x_expr}':y=0"
+    if not top_pad:
+        return f"[{inp}]{crop},scale={W}:{H},setsar=1[{out}]"
+    return (f"[{inp}]{crop},split[{out}a][{out}b];"
+            f"[{out}a]scale={W}:{H},boxblur=24:2,eq=brightness=-0.15[{out}bg];"
+            f"[{out}b]scale={W}:{fg_h}[{out}fg];"
+            f"[{out}bg][{out}fg]overlay=0:{top_pad},setsar=1[{out}]")
 
 
 # ---------- per-shot layout ("shots") ----------
@@ -603,7 +644,7 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
         # Safety net for wrong Whisper times: a cut must sit in silence. A loud start moves back
         # to the end of the nearest pause (<= 0.8 s), a loud end forward to the next pause.
         if level_db(audio_fn, s0, 0.03) > SILENCE_DB:
-            runs = silence_runs(audio_fn, s0 - 0.8, s0 + 0.02)
+            runs = silence_runs(audio_fn, s0 - 0.3, s0 + 0.02)  # 0.8 s pulled in a stutter + dead air
             if runs:
                 s0 = runs[-1][1] - 0.03
         if level_db(audio_fn, e1 - 0.03, 0.03) > -30.0:
@@ -688,7 +729,7 @@ def out_frame_time(t: float, out_fps: float = 0.0) -> float:
     return max(0.0, math.floor((t - 0.005) * 100) / 100)
 
 
-def frame_grid(s: float, e: float, info: dict) -> tuple[float, int]:
+def frame_grid(s: float, e: float, info: dict, out_fps: float = 30.0) -> tuple[float, int]:
     """Snap a segment onto the source frame grid: (start on a frame time, whole frame count).
 
     The first video frame then sits exactly at the segment start and video and audio have the
@@ -700,7 +741,19 @@ def frame_grid(s: float, e: float, info: dict) -> tuple[float, int]:
     k = math.floor((s - st) * fps + 1e-6)
     s_q = st + k / fps
     n = max(1, math.ceil((e - s_q) * fps - 1e-6))
+    # 60 fps sources rendered at 30: whole output frames per segment, or every segment adds half a
+    # frame of audio/video mismatch (67 ms over two segments failed check_output).
+    r = round(fps / out_fps) if out_fps else 1
+    if r > 1 and abs(fps / out_fps - r) < 0.01:
+        n = -(-n // r) * r
     return s_q, n
+
+
+def fix_names(word: str, fixes: dict) -> str:
+    """Correct names Whisper misspells (Lacey -> Lacy), keeping punctuation and possessives."""
+    for wrong, right in fixes.items():
+        word = re.sub(rf"(?i)\b{re.escape(wrong)}\b", right, word)
+    return word
 
 
 def censor(word: str) -> str:
@@ -776,13 +829,19 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
         # no word from before the cut (cold open began after "To this day,"), no half-heard word at the end.
         words = [w for w in caption_words(clip.get("words", []))
                  if w["s"] >= seg_s - 0.02 and (w["s"] + w["e"]) / 2 <= seg_e]
-        for chunk in chunk_words(words, cc["max_words"], cc["max_chunk_sec"]):
-            texts = [ass_escape(censor(w["w"].upper() if cc["uppercase"] else w["w"])) for w in chunk]
+        chunks = chunk_words(words, cc["max_words"], cc["max_chunk_sec"])
+        for ci, chunk in enumerate(chunks):
+            next_start = chunks[ci + 1][0]["s"] if ci + 1 < len(chunks) else None
+            texts = [ass_escape(censor(fix_names(w["w"], clip.get("name_fixes", {}))).upper() if cc["uppercase"]
+                                else censor(fix_names(w["w"], clip.get("name_fixes", {}))))
+                     for w in chunk]
             pop = cc.get("pop", 1.0)
             pop_tag = f"{{\\fscx{int(pop*100)}\\fscy{int(pop*100)}\\t(0,80,\\fscx100\\fscy100)}}" if pop > 1.0 else ""
             for i, w in enumerate(chunk):
                 t0 = w["s"] if i else chunk[0]["s"]
                 t1 = chunk[i + 1]["s"] if i + 1 < len(chunk) else chunk[-1]["e"]
+                if next_start is not None:
+                    t1 = min(t1, next_start)  # two caption lines must never be on screen together
                 t0, t1 = max(t0, seg_s), min(t1, seg_e)
                 if t1 <= t0:
                     continue
@@ -849,9 +908,11 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         out = cdir / "short.mp4"
         from .transcribe import load_audio
         audio_fn = lambda t0, d: load_audio(video, t0, d)  # noqa: E731
+        clip = {**clip, "name_fixes": source.get("name_fixes", {})}
         raw_words = merge_punct(clip.get("words", []))
         words = raw_words
-        if words:
+        if words and not clip.get("words_whisper"):
+            # Old clips without forced alignment: fall back to onset pinning.
             words = refine_words(words, audio_fn, min(w["s"] for w in words) - 0.5, max(w["e"] for w in words) + 0.5)
             clip = {**clip, "words": words}
         tol = 0.02 if clip.get("quotes") else 0.3
@@ -868,7 +929,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         # Frame-exact segments: (start, end, output offset), each a whole number of frames.
         segments, nframes, off = [], [], 0.0
         for a_, b_ in raw:
-            s_q, n = frame_grid(a_, b_, info)
+            s_q, n = frame_grid(a_, b_, info, rc["fps"])
             segments.append((s_q, s_q + n / info["fps"], off))
             nframes.append(n)
             off += n / info["fps"]
@@ -947,7 +1008,8 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 if track and len(segments) > 1:
                     seg_track, _ = face_boxes(video, s, e, timed=True)
                 graph.append(layout_filter(cfg, info, layout, cx, cam, f"{i}:v", f"l{i}",
-                                           track=seg_track, seg_start=s))
+                                           track=seg_track, seg_start=s,
+                                           source=source if source.get("campaign_url") else None))
             # Short audio fades at every cut so word-boundary splices do not click.
             fi, fo, dur = AUDIO_FADE_IN, AUDIO_FADE_OUT, (nframes[i] - 0.5) / fps
             graph.append(f"[{i}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
