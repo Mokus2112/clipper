@@ -167,11 +167,11 @@ sources:
   # Clip Farm, $1.25 CPM, YouTube + Instagram, ~$9K budget left of $20K.
   - name: clipfarm-solved
     streamer: Solved w/ Mark Manson
-    channel_url: https://www.youtube.com/@MarkManson
+    channel_url: https://www.youtube.com/@IAmMarkManson
     campaign_url: https://contentrewards.com/campaigns/6bdc8e4b-3ebf-44f1-aedb-067589ca9c89
     layout: fit   # podcast/talking head
     tags: [markmanson, podcast, selfimprovement]
-    credit: "Credit: Mark Manson (https://www.youtube.com/@MarkManson)"
+    credit: "Credit: Mark Manson (https://www.youtube.com/@IAmMarkManson)"
     required_text: ""
 
   # Practice sources: overnight pipeline evaluation only, never uploaded.
