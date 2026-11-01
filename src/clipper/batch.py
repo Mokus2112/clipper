@@ -8,22 +8,24 @@ from . import review_queue
 
 
 def latest_vod_url(channel_url: str) -> str | None:
-    """Return the URL of the most recent upload on a YouTube channel."""
-    res = subprocess.run(
-        [tool("yt-dlp"), "--no-playlist", "--playlist-items", "1",
-         "--get-id", "--flat-playlist", channel_url + "/streams"],
-        capture_output=True, text=True, timeout=60,
-    )
-    video_id = res.stdout.strip().splitlines()[0] if res.stdout.strip() else None
-    if not video_id:
-        # Fall back to /videos (VODs) if /streams returned nothing
+    """Most recent finished VOD on a channel (skips upcoming and currently live streams)."""
+    for tab in ("/streams", "/videos"):
         res = subprocess.run(
-            [tool("yt-dlp"), "--no-playlist", "--playlist-items", "1",
-             "--get-id", "--flat-playlist", channel_url + "/videos"],
-            capture_output=True, text=True, timeout=60,
+            [tool("yt-dlp"), "--flat-playlist", "--playlist-items", "1-8",
+             "--print", "%(id)s %(live_status)s %(duration)s", channel_url.rstrip("/") + tab],
+            capture_output=True, text=True, timeout=90,
         )
-        video_id = res.stdout.strip().splitlines()[0] if res.stdout.strip() else None
-    return f"https://www.youtube.com/watch?v={video_id}" if video_id else None
+        for line in res.stdout.splitlines():
+            parts = line.split()
+            if len(parts) != 3:
+                continue
+            vid, status, dur = parts
+            if status in ("is_upcoming", "is_live", "post_live"):
+                continue
+            if dur.replace(".", "").isdigit() and float(dur) < 600:
+                continue  # trailers / short uploads are not VODs
+            return f"https://www.youtube.com/watch?v={vid}"
+    return None
 
 
 def run_batch(cfg: dict, source_names: list[str], notify: bool = True) -> dict:
@@ -60,7 +62,9 @@ def run_batch(cfg: dict, source_names: list[str], notify: bool = True) -> dict:
             if rank(cfg, job):
                 transcribe_clips(cfg, job)
                 render(cfg, job)
-                clips = [i for i in review_queue.load(cfg) if i.get("source") == name and i["status"] == "pending"]
+                clips = [i for i in review_queue.load(cfg)
+                         if i.get("source") == name and i["status"] in ("pending", "practice")
+                         and i["id"].startswith(job)]
                 results[name] = {"status": "ok", "clips": len(clips), "url": url}
             else:
                 results[name] = {"status": "no_clips", "url": url}
@@ -82,7 +86,8 @@ def _send_summary(cfg: dict, sources: list[str], results: dict) -> None:
         r = results.get(name, {})
         status = r.get("status", "?")
         if status == "ok":
-            lines.append(f"  {name}: {r['clips']} klip jovahagyasra var")
+            kind = "gyakorlo klip (nem feltoltheto)" if "practice" in name else "klip jovahagyasra var"
+            lines.append(f"  {name}: {r['clips']} {kind}")
         elif status == "no_clips":
             lines.append(f"  {name}: lefutott, nincs erdekes klip")
         elif status == "skip":

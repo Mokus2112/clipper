@@ -51,7 +51,9 @@ def add(cfg: dict, clip: dict, source: dict, file: Path) -> None:
         "music": clip.get("music"),
         "reason": clip["reason"],
         "duration": round(clip["end"] - clip["start"], 1),
-        "status": "pending",
+        "source": source["name"],
+        # Practice sources are for pipeline evaluation only: never offered for approval or upload.
+        "status": "practice" if "practice" in source["name"] else "pending",
         "created": datetime.now().isoformat(timespec="seconds"),
     })
     save(cfg, items)
@@ -61,6 +63,8 @@ def set_status(cfg: dict, clip_id: str, status: str, **extra) -> dict:
     items = load(cfg)
     for i in items:
         if i["id"] == clip_id:
+            if i["status"] == "practice" and status in ("approved", "uploaded"):
+                raise SystemExit(f"{clip_id} is a practice clip and can never be approved or uploaded")
             i["status"] = status
             i.update(extra)
             save(cfg, items)

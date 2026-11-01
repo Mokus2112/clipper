@@ -38,6 +38,8 @@ def main() -> None:
     s.add_argument("sources", nargs="*", help="source names (default: all sources with 'practice' in name)")
     s.add_argument("--no-notify", action="store_true")
     sub.add_parser("overnight", help="alias for batch with all practice sources")
+    s = sub.add_parser("summary", help="send the daily Telegram summary")
+    s.add_argument("--dry", action="store_true", help="print only, don't send")
     s = sub.add_parser("memes", help="meme library commands")
     s.add_argument("subcmd", choices=["refresh", "show"], help="refresh: rebuild library; show: print scores")
 
@@ -108,6 +110,9 @@ def main() -> None:
         jobs = a.jobs or [d.name for d in (path_of(cfg, "data") / "jobs").iterdir() if d.is_dir()]
         freed = sum(remove_source(job_dir(cfg, j)) for j in jobs)
         print(f"freed {freed / 1e9:.2f} GB from {len(jobs)} jobs")
+    elif a.cmd == "summary":
+        from .summary import send_summary
+        print(send_summary(cfg, dry=a.dry))
     elif a.cmd == "memes":
         from .memes import refresh, load_library
         import json as _json
