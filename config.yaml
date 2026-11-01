@@ -216,6 +216,22 @@ sources:
     credit: "Credit: Mark Manson (https://www.youtube.com/@IAmMarkManson)"
     required_text: ""
 
+  # The Alliance for Secure AI, $1.50 CPM, TikTok/IG/YT Shorts, USA audience, AI-risk topics only.
+  # Logo (approved, data/alliance/logo1.png) must be visible for the whole video; no logo = rejected.
+  # Sources: Content Bank in data/campaigns/alliance-notion.md (Google Drive + YouTube).
+  - name: alliance-secure-ai
+    streamer: Alliance for Secure AI
+    channel_url: https://www.alliance.ai
+    layout: center
+    platforms: [youtube, tiktok, instagram]
+    tags: [aisafety, ai, airisk]
+    credit: "Source: public interview footage from the Alliance for Secure AI content bank"
+    required_text: ""
+    logo: {file: data/alliance/logo1.png, width: 260, y: 1360, caption_y: 1180}
+    rank_notes: >-
+      Topic must be AI risks/dangers. Use words like could, might, maybe where the speaker hedges; never state
+      predictions as facts. Start on the quoted hook line, end on a complete sentence. 10-40 seconds.
+
   # Practice sources: overnight pipeline evaluation only, never uploaded.
   - name: practice-kai
     streamer: Kai Cenat

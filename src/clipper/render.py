@@ -896,6 +896,20 @@ def check_output(path: Path) -> None:
     log(f"  check ok: {len(durs)} audio packets x 1024, audio/video diff {gap * 1000:.0f} ms")
 
 
+def inputs_idx(inputs: list) -> list:
+    """Indices of the -i inputs in an ffmpeg arg list."""
+    return [i for i, a in enumerate(inputs) if a == "-i"]
+
+
+def logo_box(src: Path, width: int) -> Path:
+    """Logo on a white padded box (readable on any background), cached next to the source logo."""
+    out = src.with_name(f"{src.stem}_box{width}.png")
+    if not out.exists():
+        run([tool("ffmpeg"), "-v", "error", "-y", "-i", src, "-vf",
+             f"scale={width}:-2,format=rgb24,pad=iw+40:ih+40:20:20:white", "-frames:v", "1", out])
+    return out
+
+
 def render(cfg: dict, job_id: str) -> list[Path]:
     rc = cfg["render"]
     jd = job_dir(cfg, job_id)
@@ -1031,7 +1045,9 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                     a = off_ + (0.0 if sh is plan[0] else sh["f0"] / info["fps"])
                     b = off_ + (e_ - s_ if sh is plan[-1] else sh["f1"] / info["fps"])
                     shot_spans.append((out_frame_time(a, rc["fps"]), out_frame_time(b, rc["fps"]), sh["kind"]))
-        (cdir / "captions.ass").write_text(build_ass(cfg, clip, segments, layout, shot_spans))
+        lg = source.get("logo") or {}
+        cap_cfg = cfg if "caption_y" not in lg else {**cfg, "captions": {**cfg["captions"], "y_fit": lg["caption_y"], "y_center": lg["caption_y"]}}
+        (cdir / "captions.ass").write_text(build_ass(cap_cfg, clip, segments, layout, shot_spans))
 
         inputs, graph, concat = [], [], ""
         for i, (s, e, _) in enumerate(segments):
@@ -1094,7 +1110,15 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             log(f"  meme effects: {meme_fx} at {window}")
         else:
             cap_in = "cv"
-        graph.append(f"[{cap_in}]subtitles=captions.ass:fontsdir={fonts}[v]")
+        logo = source.get("logo")
+        if logo:
+            # Campaign-mandated logo (Alliance): white padded box, centred under the video panel, whole clip.
+            box = logo_box(Path(logo["file"]), int(logo.get("width", 340)))
+            inputs += ["-loop", "1", "-i", box.resolve()]
+            graph.append(f"[{cap_in}]subtitles=captions.ass:fontsdir={fonts}[cs]")
+            graph.append(f"[cs][{len(inputs_idx(inputs)) - 1}:v]overlay=(W-w)/2:{int(logo.get('y', 1360))}:shortest=1[v]")
+        else:
+            graph.append(f"[{cap_in}]subtitles=captions.ass:fontsdir={fonts}[v]")
         # Concat leaves gaps/overlaps in the audio timestamps (1-sample packets, one 2.36 s packet):
         # timestamp-driven players (YouTube, Telegram, Safari) then garble the start. Rebuild
         # continuous timestamps from the sample count.
