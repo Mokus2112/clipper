@@ -174,7 +174,8 @@ def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam:
     else:
         center = (cx if cx is not None else 0.5) * sw
         x_expr = str(int(min(max(center - cw / 2, 0), sw - cw)))
-    return f"[{inp}]crop={cw}:{sh}:{x_expr}:0,scale={W}:{H},setsar=1[{out}]"
+    # Quoted: the tracking expression contains commas, which would otherwise split the filter chain.
+    return f"[{inp}]crop=w={cw}:h={sh}:x='{x_expr}':y=0,scale={W}:{H},setsar=1[{out}]"
 
 
 # ---------- per-shot layout ("shots") ----------
@@ -653,8 +654,12 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                     graph.append(f"[p{i}_{j}]null{zoom}[l{i}_{j}]")
                 graph.append("".join(f"[l{i}_{j}]" for j in range(k)) + f"concat=n={k}:v=1:a=0[l{i}]")
             else:
+                # Each segment gets its own face track (the cold open lies outside the main range).
+                seg_track = track
+                if track and len(segments) > 1:
+                    seg_track, _ = face_boxes(video, s, e, timed=True)
                 graph.append(layout_filter(cfg, info, layout, cx, cam, f"{i}:v", f"l{i}",
-                                           track=track, seg_start=s))
+                                           track=seg_track, seg_start=s))
             # Short audio fades at every cut so word-boundary splices do not click.
             fi, fo, dur = AUDIO_FADE_IN, AUDIO_FADE_OUT, (nframes[i] - 0.5) / fps
             graph.append(f"[{i}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
