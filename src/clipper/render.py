@@ -952,6 +952,12 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 lead = 0
             if n - tail > 2 and speech_in(s_ + tail / fps, s_ + n / fps):
                 tail = n
+            # 60 fps source at 30 fps output: keep the segment a whole number of output frames
+            # (lead rounds up, length rounds down), or A/V drift by 33 ms per odd trim.
+            r = round(fps / rc["fps"]) if rc["fps"] else 1
+            if r > 1 and abs(fps / rc["fps"] - r) < 0.01 and (lead or tail < n):
+                lead = -(-lead // r) * r
+                tail = lead + max(r, (tail - lead) // r * r)
             if lead or tail < n:
                 log(f"  segment {k}: trimmed {lead} lead / {n - tail} tail frames at camera cuts")
             s_ = s_ + lead / info["fps"]
@@ -1007,7 +1013,8 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 seg_track = track
                 if track and len(segments) > 1:
                     seg_track, _ = face_boxes(video, s, e, timed=True)
-                graph.append(layout_filter(cfg, info, layout, cx, cam, f"{i}:v", f"l{i}",
+                graph.append(f"[{i}:v]setpts=PTS-STARTPTS[z{i}]")
+                graph.append(layout_filter(cfg, info, layout, cx, cam, f"z{i}", f"l{i}",
                                            track=seg_track, seg_start=s,
                                            source=source if source.get("campaign_url") else None))
             # Short audio fades at every cut so word-boundary splices do not click.
@@ -1045,6 +1052,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             "-r", rc["fps"], "-c:v", "libx264", "-preset", rc["preset"], "-crf", rc["crf"], "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
         ]
+        (cdir / "graph.txt").write_text(";\n".join(graph))
         run(cmd + ["-movflags", "+faststart", out.name], cwd=cdir)
         check_output(out)
         # Preview frame for the review step (taken after the hook disappears).

@@ -177,12 +177,22 @@ def check_caption_sync(video: Path, ass: Path) -> list[str]:
     hl = _highlights(ass)
     bad = []
     starts = sorted({round(h[0], 2) for h in hl})
-    for o in onsets:
-        near = [t for t in starts if abs(t - o) <= 0.5]
-        if near:
-            t = min(near, key=lambda t: abs(t - o))
-            if abs(t - o) > 0.08:
-                bad.append(f"caption sync: word lights up at {t:.2f}s, audio onset {o:.2f}s ({(t - o) * 1000:+.0f} ms)")
+    # Mutual nearest pairing: a pair counts only if the onset's nearest highlight t also has that
+    # onset as its nearest onset. Only words after >= 150 ms of silence are checked; unpaired
+    # onsets (laughs, breaths, other speakers, second onsets inside one word) are ignored.
+    for t in starts:
+        if not onsets:
+            continue
+        o = min(onsets, key=lambda o: abs(o - t))
+        if abs(o - t) > 0.5:
+            continue
+        j = int(round(o / 0.01))
+        if j < 15 or speech[j - 15:j].any():
+            continue
+        if min(starts, key=lambda s: abs(s - o)) != t:
+            continue
+        if abs(t - o) > 0.08:
+            bad.append(f"caption sync: word lights up at {t:.2f}s, audio onset {o:.2f}s ({(t - o) * 1000:+.0f} ms)")
     seen = set()
     for s0, _e, w in hl:
         key = round(s0, 2)

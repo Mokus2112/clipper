@@ -84,9 +84,26 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
             {"w": w.word.strip(), "s": round(lo + w.start, 2), "e": round(lo + w.end, 2)}
             for seg in segments for w in (seg.words or []) if w.word.strip()
         ]
+        quotes0 = clip.get("quotes") or {}
+        if quotes0.get("end_quote") and not find_quote(words, quotes0["end_quote"], near=clip["end"]):
+            # Whisper sometimes drops the last words of a window (crosstalk, VAD, profanity):
+            # re-transcribe the tail without VAD and splice the missing words in.
+            t0 = max(lo, clip["end"] - 10)
+            seg2, _ = m.transcribe(load_audio(video, t0, hi - t0), word_timestamps=True, vad_filter=False,
+                                   condition_on_previous_text=False, language=language,
+                                   initial_prompt=f"{source_names}Um, so, like, you know, I mean, it's, uh, yeah. Verbatim.")
+            tail = [{"w": w.word.strip(), "s": round(t0 + w.start, 2), "e": round(t0 + w.end, 2)}
+                    for sg in seg2 for w in (sg.words or []) if w.word.strip()]
+            if tail:
+                cut = tail[0]["s"] - 0.05
+                words = [w for w in words if w["e"] <= cut] + tail
+                log(f"{clip['id']}: end quote missing, re-transcribed tail from {t0:.1f}s ({len(tail)} words)")
         # Whisper's text, forced-aligned times (Whisper word times drift 0.2-0.6 s).
         from .align import align_words
-        aligned = align_words(words, load_audio(video, lo, hi - lo), lo)
+        win_audio = load_audio(video, lo, hi - lo)
+        aligned = align_words(words, win_audio, lo)
+        if aligned:
+            aligned = snap_to_onsets(aligned, win_audio, lo)
         if aligned:
             clip["words_whisper"] = words
             words = aligned
@@ -158,3 +175,31 @@ def snap(words: list[dict], start: float, end: float, cc: dict) -> tuple[float, 
     if end - start > cc["max_sec"]:
         end = start + cc["max_sec"]
     return round(start, 2), round(end, 2)
+
+
+def snap_to_onsets(words: list[dict], audio: np.ndarray, lo: float) -> list[dict]:
+    """Forced alignment can start the first word after a pause 100-400 ms off. Move such a word
+    onto the audio onset (mutual nearest pairing, onset preceded by >= 150 ms of silence)."""
+    from .qa import _db_curve
+    db = _db_curve(audio)
+    speech = db >= -35.0
+    onsets = [lo + i * 0.01 for i in range(15, len(speech)) if speech[i] and not speech[i - 15:i].any()]
+    if not onsets:
+        return words
+    cands = list(range(len(words)))
+    cand_t = [words[i]["s"] for i in cands]
+    out = [dict(w) for w in words]
+    for i in cands:
+        s = words[i]["s"]
+        o = min(onsets, key=lambda o: abs(o - s))
+        if abs(o - s) <= 0.04 or abs(o - s) > 0.45:
+            continue
+        if min(cand_t, key=lambda c: abs(c - o)) != s:
+            continue
+        if i > 0 and o < out[i - 1]["s"] + 0.05:
+            continue
+        if i > 0:
+            out[i - 1]["e"] = round(min(out[i - 1]["e"], o), 3)
+        log(f"  onset snap: '{words[i]['w']}' {s:.2f} -> {o:.2f}")
+        out[i]["s"] = round(o, 3)
+    return out
