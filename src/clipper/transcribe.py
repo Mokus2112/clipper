@@ -103,7 +103,7 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
         win_audio = load_audio(video, lo, hi - lo)
         aligned = align_words(words, win_audio, lo)
         if aligned:
-            aligned = snap_to_onsets(aligned, win_audio, lo)
+            aligned = snap_to_onsets(aligned, win_audio, lo, ref=words)
         if aligned:
             clip["words_whisper"] = words
             words = aligned
@@ -177,7 +177,7 @@ def snap(words: list[dict], start: float, end: float, cc: dict) -> tuple[float, 
     return round(start, 2), round(end, 2)
 
 
-def snap_to_onsets(words: list[dict], audio: np.ndarray, lo: float) -> list[dict]:
+def snap_to_onsets(words: list[dict], audio: np.ndarray, lo: float, ref: list[dict] | None = None) -> list[dict]:
     """Forced alignment can start the first word after a pause 100-400 ms off. Move such a word
     onto the audio onset (mutual nearest pairing, onset preceded by >= 150 ms of silence)."""
     from .qa import _db_curve
@@ -197,6 +197,13 @@ def snap_to_onsets(words: list[dict], audio: np.ndarray, lo: float) -> list[dict
         if min(cand_t, key=lambda c: abs(c - o)) != s:
             continue
         if i > 0 and o < out[i - 1]["s"] + 0.05:
+            continue
+        # The onset must fall inside this word as whisper heard it, and before the next aligned word:
+        # it may belong to a word the aligner misplaced (the next speaker's "Jesus").
+        # (The aligner may squeeze a word into 20 ms, so its own end is no limit.)
+        if ref is not None and len(ref) == len(words) and o > ref[i]["e"] - 0.04:
+            continue
+        if i + 1 < len(words) and o > words[i + 1]["s"] - 0.04:
             continue
         if i > 0:
             out[i - 1]["e"] = round(min(out[i - 1]["e"], o), 3)
