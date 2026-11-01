@@ -1024,7 +1024,10 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 seg_track = track
                 if track and len(segments) > 1:
                     seg_track, _ = face_boxes(video, s, e, timed=True)
-                graph.append(f"[{i}:v]setpts=PTS-STARTPTS[z{i}]")
+                # Cap at the exact output frame count: concat plus -r otherwise adds a frame per segment
+                # on a 60 fps source (video longer than audio).
+                n_out = round(nframes[i] * float(rc["fps"]) / info["fps"]) if rc["fps"] else nframes[i]
+                graph.append(f"[{i}:v]setpts=PTS-STARTPTS,fps={rc['fps']},trim=end_frame={n_out}[z{i}]")
                 graph.append(layout_filter(cfg, info, layout, cx, cam, f"z{i}", f"l{i}",
                                            track=seg_track, seg_start=s,
                                            source=source if source.get("campaign_url") else None))
