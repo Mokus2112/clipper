@@ -97,7 +97,7 @@ def _send_summary(cfg: dict, sources: list[str], results: dict) -> None:
     pending = [i["id"] for i in review_queue.load(cfg) if i["status"] == "pending"]
     keyboard_json = current_keyboard(cfg) if pending else None
     import json
-    args = ["-d", f"chat_id={chat_id}", "-d", f"text={chr(10).join(lines)}"]
+    args = ["--data-urlencode", f"chat_id={chat_id}", "--data-urlencode", f"text={chr(10).join(lines)}"]
     if keyboard_json:
         args += ["--data-urlencode", f"reply_markup={keyboard_json}"]
     send(token, args, "sendMessage")
