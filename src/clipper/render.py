@@ -1,5 +1,6 @@
 """Step 5: render each selected clip as a 1080x1920 Short with layout, word-by-word captions and a hook."""
 
+import re
 from pathlib import Path
 
 from .common import ROOT, find_source, job_dir, log, path_of, probe, read_json, run, source_video, tool, write_json
@@ -196,6 +197,17 @@ def chunk_words(words: list[dict], max_words: int, max_sec: float) -> list[list[
     return chunks
 
 
+_PROFANITY = re.compile(r"(?i)\b(motherf|f)u(ck\w*)|(?<![a-z])((?:bull)?sh)i(t\w*)|\b(b)i(tch\w*)|\b(c)u(nt\w*)")
+
+
+def censor(word: str) -> str:
+    """Mask strong profanity in burned-in captions (audio is untouched): FUCK -> F*CK."""
+    def mask(m: re.Match) -> str:
+        g = [x for x in m.groups() if x is not None]
+        return g[0] + "*" + g[1]
+    return _PROFANITY.sub(mask, word)
+
+
 def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]], layout: str) -> str:
     """ASS captions for the output timeline; segments map source ranges to output offsets (cold open + main)."""
     cc, hc, rc = cfg["captions"], cfg["hook"], cfg["render"]
@@ -224,7 +236,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
     for seg_s, seg_e, off in segments:
         words = [w for w in clip.get("words", []) if w["s"] >= seg_s - 0.05 and w["e"] <= seg_e + 0.05]
         for chunk in chunk_words(words, cc["max_words"], cc["max_chunk_sec"]):
-            texts = [ass_escape(w["w"].upper() if cc["uppercase"] else w["w"]) for w in chunk]
+            texts = [ass_escape(censor(w["w"].upper() if cc["uppercase"] else w["w"])) for w in chunk]
             pop = cc.get("pop", 1.0)
             pop_tag = f"{{\\fscx{int(pop*100)}\\fscy{int(pop*100)}\\t(0,80,\\fscx100\\fscy100)}}" if pop > 1.0 else ""
             for i, w in enumerate(chunk):

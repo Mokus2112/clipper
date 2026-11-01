@@ -9,7 +9,8 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-BIN_DIRS = [ROOT / "bin", Path.home() / ".local" / "bin", Path.home() / ".bun" / "bin"]
+BIN_DIRS = [ROOT / "bin", Path("/opt/homebrew/opt/ffmpeg-full/bin"),  # keg-only ffmpeg with libass (captions)
+            Path.home() / ".local" / "bin", Path.home() / ".bun" / "bin"]
 
 
 def log(msg: str) -> None:
