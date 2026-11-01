@@ -588,13 +588,17 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
     # Whisper's next-word start is unreliable); fall back to the quietest point.
     # Search no further than the next word's end: past that, the next sentence is surely playing.
     hi = last["e"] + 0.35 if nxt is None else min(last["e"] + 0.35, nxt["e"] - 0.05)
-    q = first_silence(audio_fn, last["e"], hi)
+    # Whisper word ends can also be late (medium ran ~0.4 s late): start looking for the pause a bit
+    # before the reported end, but not inside the first part of the word itself.
+    lo = max(last["s"] + 0.15, last["e"] - 0.4)
+    q = first_silence(audio_fn, lo, hi)
     if q is None:
         # Connected speech: cut at the quietest point before the next word really starts.
         q = quietest(audio_fn, last["e"], last["e"] + 0.3 if nxt is None else min(last["e"] + 0.3, nxt["s"] + 0.1))
     if q is not None:
         e1 = q
-    s0, e1 = min(s0, first["s"]), max(e1, last["e"])
+    s0 = min(s0, first["s"])
+    e1 = max(e1, last["s"] + 0.15)
     if audio_fn is not None:
         # Safety net for wrong Whisper times: a cut must sit in silence. A loud start moves back
         # to the end of the nearest pause (<= 0.8 s), a loud end forward to the next pause.
@@ -646,8 +650,23 @@ def refine_words(words: list[dict], audio_fn, t0: float, t1: float) -> list[dict
         if not cands:
             continue
         # A word whose Whisper start lies in the silence before the onset must start at the onset.
+        # A word that ends a phrase ("day," before the pause) belongs before the silence even when
+        # Whisper put its start late: the onset after the pause is the next word's.
+        ends_phrase = lambda k: out[k]["w"].rstrip("\"'”’)").endswith((",", ".", "?", "!"))  # noqa: E731
+        moved = []
+        for k in cands:
+            if ends_phrase(k) and k + 1 < len(out) and k + 1 not in taken and abs(out[k + 1]["s"] - o) <= 1.0:
+                moved.append(k + 1)
+            else:
+                moved.append(k)
+        cands = sorted(set(moved))
         in_gap = [k for k in cands if sil - 0.02 <= out[k]["s"] < o]
         k = in_gap[0] if in_gap else min(cands, key=lambda k: abs(out[k]["s"] - o))
+        if k > 0 and ends_phrase(k - 1) and out[k - 1]["s"] >= sil - 0.02:
+            # The phrase-ending word sits before the pause: pull it in front of the silence.
+            prev_s = out[k - 2]["s"] if k > 1 else out[k - 1]["s"] - 0.5
+            out[k - 1]["e"] = round(sil, 3)
+            out[k - 1]["s"] = round(max(prev_s + 0.02, sil - 0.25), 3)
         out[k]["s"] = round(o, 3)
         out[k]["e"] = max(out[k]["e"], o + 0.05)
         if k > 0 and out[k - 1]["e"] > sil:
@@ -753,8 +772,10 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
                 )
     for seg_s, seg_e, off in segments:
         # A word is captioned only if its middle is inside the segment (no half-heard word at a cut).
+        # A word is captioned only if it starts inside the segment and its middle is inside too:
+        # no word from before the cut (cold open began after "To this day,"), no half-heard word at the end.
         words = [w for w in caption_words(clip.get("words", []))
-                 if seg_s <= (w["s"] + w["e"]) / 2 <= seg_e]
+                 if w["s"] >= seg_s - 0.02 and (w["s"] + w["e"]) / 2 <= seg_e]
         for chunk in chunk_words(words, cc["max_words"], cc["max_chunk_sec"]):
             texts = [ass_escape(censor(w["w"].upper() if cc["uppercase"] else w["w"])) for w in chunk]
             pop = cc.get("pop", 1.0)
@@ -932,8 +953,8 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             graph.append(f"[{i}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
                          f"apad=whole_dur={nframes[i] / fps:.6f}[a{i}]")
             concat += f"[l{i}][a{i}]"
-        # loudnorm alone let true peaks reach -0.7 dBFS; the limiter keeps samples under -2 dBFS.
-        audio = ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=192000,alimiter=limit=0.79:level=false:attack=1:release=50,aresample=48000" if rc["loudnorm"] else ""
+        # loudnorm alone let true peaks reach -0.7 dBFS; limiter at -3 dBFS leaves room for AAC overshoot (~1.5 dB).
+        audio = ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=192000,alimiter=limit=0.708:level=false:attack=1:release=50,aresample=48000" if rc["loudnorm"] else ""
         graph.append(f"{concat}concat=n={len(segments)}:v=1:a=1[cv][ca0]")
         from .memes import pick_effects, meme_filter_chain
         meme_fx = pick_effects(cfg, clip)
