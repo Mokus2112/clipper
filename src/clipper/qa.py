@@ -43,7 +43,7 @@ def text_boxes(cdir: Path, dur: float, fonts: Path) -> list[tuple[float, tuple[i
 def face_boxes(video: Path, dur: float) -> list[tuple[float, tuple[int, int, int, int]]]:
     import cv2
     det = cv2.FaceDetectorYN.create(str(ROOT / "models" / "face_detection_yunet_2023mar.onnx"), "",
-                                    (540, 960), 0.6, 0.3, 50)
+                                    (540, 960), 0.7, 0.3, 50)
     cap = cv2.VideoCapture(str(video))
     out, t = [], 0.0
     while t < dur:
