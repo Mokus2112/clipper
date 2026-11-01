@@ -20,7 +20,7 @@ def face_boxes(video: Path, start: float, end: float, timed: bool = False
 
     # YuNet (OpenCV zoo, 230 KB) finds small and angled facecam faces far more reliably than Haar cascades.
     detector = cv2.FaceDetectorYN.create(str(ROOT / "models" / "face_detection_yunet_2023mar.onnx"), "",
-                                         (640, 360), 0.6, 0.3, 50)
+                                         (640, 360), 0.7, 0.3, 50)
     cap = cv2.VideoCapture(str(video))
     boxes: list = []
     timed_pts: list[tuple[float, float]] = []
@@ -66,6 +66,11 @@ def _ema_smooth(pts: list[tuple[float, float]], alpha: float,
 def _ema_track(pts: list[tuple[float, float]], alpha: float) -> list[tuple[float, float]]:
     """EMA over (time, cx_frac) pairs; returns smoothed (time, cx_frac)."""
     out, ema = [], None
+    if len(pts) >= 3:  # median of 3 drops single-sample outliers (a hand or a background face)
+        cxs = [p[1] for p in pts]
+        med = ([sorted(cxs[:3])[1]] + [sorted(cxs[i - 1:i + 2])[1] for i in range(1, len(cxs) - 1)]
+               + [sorted(cxs[-3:])[1]])  # the ends use the 3 nearest samples (a cut can land on the last one)
+        pts = [(p[0], m) for p, m in zip(pts, med)]
     for t, cx in pts:
         ema = cx if ema is None else alpha * cx + (1 - alpha) * ema
         out.append((t, ema))
@@ -298,7 +303,7 @@ def plan_shots(video: Path, info: dict, start: float, end: float) -> list[dict]:
     merged.append((tail[0], tail[1]) if tail else (dur, None))
 
     detector = cv2.FaceDetectorYN.create(str(ROOT / "models" / "face_detection_yunet_2023mar.onnx"), "",
-                                         (640, 360), 0.6, 0.3, 50)
+                                         (640, 360), 0.7, 0.3, 50)
     cap = cv2.VideoCapture(str(video))
     shots = []
     for (t0, f0), (t1, f1) in zip(merged[:-1], merged[1:]):

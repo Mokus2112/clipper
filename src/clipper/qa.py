@@ -323,7 +323,8 @@ def check_uncaptioned_speech(video: Path, ass: Path, thr_db: float = -35.0, min_
             j = i
             while j < len(db) and db[j] > thr_db and not covered[j]:
                 j += 1
-            if (j - i) / 100 >= min_len:
+            # a short but loud run (>= 100 ms, peak above -20 dB) is a spoken syllable, not a caption gap
+            if (j - i) / 100 >= min_len or ((j - i) >= 10 and db[i:j].max() > -20):
                 out.append(f"{i / 100:.2f}-{j / 100:.2f}")
             i = j
         else:

@@ -109,6 +109,11 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
             words = aligned
         else:
             log(f"{clip['id']}: forced alignment failed, using Whisper word times")
+        # Manual fix for words Whisper and the aligner both missed (clip["word_inserts"], survives re-runs).
+        for ins in clip.get("word_inserts") or []:
+            if not any(abs(w["s"] - ins["s"]) < 0.05 and w["w"].lower() == ins["w"].lower() for w in words):
+                words.append(dict(ins))
+        words.sort(key=lambda w: w["s"])
         clip["words"] = words
         quotes = clip.get("quotes")
         if quotes:
@@ -154,6 +159,8 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
                     if continue_payoff and any(_PROFANITY.search(w["w"]) for w in words[i0:i1 + 1]):
                         log(f"{clip['id']}: payoff has strong profanity, no cold open")
                         clip["payoff_start"] = clip["payoff_end"] = None
+            if clip.get("end_pad"):  # manual tail for a slow word decay, survives re-runs
+                clip["end"] = round(clip["end"] + clip["end_pad"], 3)
             log(f"{clip['id']}: quotes start={'ok' if qs else 'MISS'} end={'ok' if qe else 'MISS'}")
             log(f"{clip['id']}: {len(words)} words, {clip['end'] - clip['start']:.1f}s")
             continue
