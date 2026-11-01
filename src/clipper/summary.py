@@ -22,7 +22,10 @@ def build(cfg: dict) -> str:
     else:
         lines.append("Ma nem keszult klip.")
     for i in uploaded:
-        lines.append(f"Feltoltve: {i['title']} https://youtube.com/shorts/{i.get('video_id', '?')}")
+        note = i.get("privacy", "?")
+        if i.get("superseded_by"):
+            note += f", lecserelve: {i['superseded_by']}"
+        lines.append(f"Feltoltve ({note}): {i['title']} https://youtube.com/shorts/{i.get('video_id', '?')}")
     if approved:
         lines.append(f"Jovahagyva, feltoltesre var: {len(approved)}")
     if pending:
