@@ -183,19 +183,24 @@ MIN_SHOT = 0.5          # s, shorter shots are merged into the previous one
 DUO_MIN_SEP = 0.25      # two faces at least this far apart (fraction of width) -> stacked duo layout
 
 
-def scene_cuts(video: Path, start: float, dur: float) -> list[float]:
-    """Camera cut times (seconds from start) inside [start, start+dur]."""
+def scene_cuts(video: Path, start: float, dur: float) -> list[tuple[float, int]]:
+    """Camera cuts inside [start, start+dur] as (seconds from start, frame index).
+
+    The frame index is the first frame of the new shot, counted exactly like the render input
+    (same -ss), so layout switches can be placed on that frame with trim start_frame/end_frame.
+    """
     res = subprocess.run(
         [tool("ffmpeg"), "-v", "error", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(video), "-an",
          "-vf", "setpts=PTS-STARTPTS,scale=320:-2,scdet=threshold=100,metadata=print:file=-", "-f", "null", "-"],
         capture_output=True, text=True, check=True,
     )
-    cuts, t = [], None
+    cuts, t, n = [], None, None
     for line in res.stdout.splitlines():
         if "pts_time:" in line:
+            n = int(line.split("frame:", 1)[1].split()[0])
             t = float(line.rsplit("pts_time:", 1)[1].split()[0])
         elif "scd.score=" in line and t is not None and float(line.split("=", 1)[1]) >= SCENE_CUT_SCORE:
-            cuts.append(t)
+            cuts.append((t, n))
     return cuts
 
 
@@ -227,23 +232,23 @@ def plan_shots(video: Path, start: float, end: float) -> list[dict]:
     """
     import cv2
     dur = end - start
-    bounds = [0.0] + [c for c in scene_cuts(video, start, dur) if MIN_SHOT <= c <= dur - MIN_SHOT] + [dur]
-    merged = [bounds[0]]
-    for b in bounds[1:-1]:
-        if b - merged[-1] >= MIN_SHOT:
-            merged.append(b)
-    merged.append(dur)
+    cuts = [c for c in scene_cuts(video, start, dur) if MIN_SHOT <= c[0] <= dur - MIN_SHOT]
+    merged = [(0.0, 0)]
+    for c in cuts:
+        if c[0] - merged[-1][0] >= MIN_SHOT:
+            merged.append(c)
+    merged.append((dur, None))  # last shot runs to the end of the segment
 
     detector = cv2.FaceDetectorYN.create(str(ROOT / "models" / "face_detection_yunet_2023mar.onnx"), "",
                                          (640, 360), 0.6, 0.3, 50)
     cap = cv2.VideoCapture(str(video))
     shots = []
-    for t0, t1 in zip(merged[:-1], merged[1:]):
+    for (t0, f0), (t1, f1) in zip(merged[:-1], merged[1:]):
         n = max(1, int((t1 - t0 - 0.3) / 0.5))
         times = [start + t0 + 0.15 + (t1 - t0 - 0.3) * (k + 0.5) / n for k in range(n)]
         samples = [all_faces(cap, detector, t) for t in times]
         with_faces = [f for f in samples if f]
-        shot = {"t0": t0, "t1": t1, "kind": "fit"}
+        shot = {"t0": t0, "t1": t1, "f0": f0, "f1": f1, "kind": "fit"}
         if len(with_faces) * 2 >= len(samples):
             pairs = []
             for faces in with_faces:
@@ -275,6 +280,22 @@ def duo_panel(box: tuple, info: dict, aspect: float) -> tuple[int, int, int, int
     x = min(max(cx - w / 2, 0), sw - w)
     y = min(max(cy - h / 2, 0), sh - h)
     return even(w), even(h), even(x), even(y)
+
+
+def push_in(cfg: dict, fps: float) -> str:
+    """Slow push-in from the first frame of a shot: zoom 1.0 + rate*t, capped.
+
+    perspective resamples with sub-pixel precision (cubic), so the zoom does not step/jitter
+    like crop/zoompan with integer offsets. `in` is the frame count since the shot started.
+    """
+    rc = cfg["render"]
+    rate, cap = rc.get("push_in_rate", 0.0), rc.get("push_in_max", 1.0)
+    if rate <= 0 or cap <= 1.0:
+        return ""
+    z = f"min(1+{rate}*in/{fps:.5f},{cap})"
+    dx, dy = f"W*(1-1/{z})/2", f"H*(1-1/{z})/2"
+    return (f",perspective=x0='{dx}':y0='{dy}':x1='W-{dx}':y1='{dy}':x2='{dx}':y2='H-{dy}'"
+            f":x3='W-{dx}':y3='H-{dy}':interpolation=cubic:eval=frame")
 
 
 def shot_filter(cfg: dict, info: dict, shot: dict, inp: str, out: str) -> str:
@@ -495,10 +516,13 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 log(f"  segment {i}: " + ", ".join(f"{x['t0']:.2f}-{x['t1']:.2f} {x['kind']}" for x in shots))
                 k = len(shots)
                 graph.append(f"[{i}:v]setpts=PTS-STARTPTS,split={k}" + "".join(f"[s{i}_{j}]" for j in range(k)))
+                zoom = push_in(cfg, info["fps"])
                 for j, sh in enumerate(shots):
-                    end_opt = "" if j == k - 1 else f":end={sh['t1']:.4f}"
-                    graph.append(f"[s{i}_{j}]trim=start={sh['t0']:.4f}{end_opt},setpts=PTS-STARTPTS[t{i}_{j}]")
-                    graph.append(shot_filter(cfg, info, sh, f"t{i}_{j}", f"l{i}_{j}"))
+                    # Frame indices, not timestamps: rounding a time can move the switch by one frame.
+                    end_opt = "" if sh["f1"] is None else f":end_frame={sh['f1']}"
+                    graph.append(f"[s{i}_{j}]trim=start_frame={sh['f0']}{end_opt},setpts=PTS-STARTPTS[t{i}_{j}]")
+                    graph.append(shot_filter(cfg, info, sh, f"t{i}_{j}", f"p{i}_{j}"))
+                    graph.append(f"[p{i}_{j}]null{zoom}[l{i}_{j}]")
                 graph.append("".join(f"[l{i}_{j}]" for j in range(k)) + f"concat=n={k}:v=1:a=0[l{i}]")
             else:
                 graph.append(layout_filter(cfg, info, layout, cx, cam, f"{i}:v", f"l{i}",

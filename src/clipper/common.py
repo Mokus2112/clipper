@@ -83,12 +83,15 @@ def source_video(jd: Path) -> Path:
 def probe(path: Path) -> dict:
     out = subprocess.run(
         [tool("ffprobe"), "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=width,height:format=duration", "-of", "json", str(path)],
+         "-show_entries", "stream=width,height,avg_frame_rate:format=duration", "-of", "json", str(path)],
         check=True, capture_output=True, text=True,
     ).stdout
     info = json.loads(out)
     st = info["streams"][0]
-    return {"width": st["width"], "height": st["height"], "duration": float(info["format"]["duration"])}
+    num, _, den = st.get("avg_frame_rate", "30/1").partition("/")
+    fps = float(num) / float(den or 1) if float(den or 1) else 30.0
+    return {"width": st["width"], "height": st["height"], "duration": float(info["format"]["duration"]),
+            "fps": fps or 30.0}
 
 
 def remove_source(jd: Path) -> int:
