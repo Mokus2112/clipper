@@ -993,6 +993,12 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 continue
             f0 = -(-int((ga + GAP_KEEP - ms_) * fps) // r) * r
             f1 = int((gb - GAP_KEEP - ms_) * fps) // r * r
+            # Never cut into a word: pull the cut edges back from any word they touch.
+            for w in words:
+                if ms_ + f0 / fps < w["s"] < ms_ + f1 / fps:
+                    f1 = int((w["s"] - 0.04 - ms_) * fps) // r * r
+                if ms_ + f0 / fps < w["e"] < ms_ + f1 / fps:
+                    f0 = -(-int((w["e"] + 0.04 - ms_) * fps) // r) * r
             if f1 - f0 >= r and (not cuts_f or f0 > cuts_f[-1][1]):
                 cuts_f.append((f0, f1))
         if cuts_f:
