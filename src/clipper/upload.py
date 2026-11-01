@@ -61,11 +61,13 @@ def upload(cfg: dict, limit: int | None = None) -> list[str]:
         resp = None
         while resp is None:
             _, resp = req.next_chunk()
-        review_queue.set_status(cfg, item["id"], "uploaded", video_id=resp["id"],
+        # Report what YouTube actually set: unverified API projects can be forced to private.
+        privacy = (resp.get("status") or {}).get("privacyStatus") or f"unknown, requested {uc['privacy']}"
+        review_queue.set_status(cfg, item["id"], "uploaded", video_id=resp["id"], privacy=privacy,
                                 uploaded_at=datetime.now().isoformat(timespec="seconds"))
-        log(f"uploaded {item['id']} -> https://youtube.com/shorts/{resp['id']} ({uc['privacy']})")
+        log(f"uploaded {item['id']} -> https://youtube.com/shorts/{resp['id']} (privacy: {privacy}, requested {uc['privacy']})")
         done.append(resp["id"])
         if cfg.get("telegram", {}).get("notify"):
             from .notify import send_upload_result
-            send_upload_result(cfg, item["id"], resp["id"], uc["privacy"])
+            send_upload_result(cfg, item["id"], resp["id"], privacy)
     return done
