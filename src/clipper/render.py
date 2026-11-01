@@ -10,22 +10,26 @@ def even(x: float) -> int:
     return int(x) // 2 * 2
 
 
-def face_boxes(video: Path, start: float, end: float) -> tuple[list[tuple[float, float, float, float]], int]:
-    """Largest face per frame as (x, y, w, h) fractions of the frame, sampled twice per second."""
+def face_boxes(video: Path, start: float, end: float, timed: bool = False
+               ) -> tuple[list, int]:
+    """Largest face per frame as (x, y, w, h) fractions of the frame, sampled twice per second.
+    If timed=True, returns ([(t, cx_frac), ...], samples) for dynamic tracking."""
     import cv2
 
     # YuNet (OpenCV zoo, 230 KB) finds small and angled facecam faces far more reliably than Haar cascades.
     detector = cv2.FaceDetectorYN.create(str(ROOT / "models" / "face_detection_yunet_2023mar.onnx"), "",
                                          (640, 360), 0.6, 0.3, 50)
     cap = cv2.VideoCapture(str(video))
-    boxes, samples = [], 0
+    boxes: list = []
+    timed_pts: list[tuple[float, float]] = []
+    samples = 0
     t = start
     while t < end:
         samples += 1
         cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
         ok, frame = cap.read()
-        t += 0.5
         if not ok:
+            t += 0.5
             continue
         # 640 px keeps small facecam faces detectable while staying fast.
         scale = 640 / frame.shape[1]
@@ -35,9 +39,44 @@ def face_boxes(video: Path, start: float, end: float) -> tuple[list[tuple[float,
         _, faces = detector.detect(small)
         if faces is not None and len(faces):
             x, y, w, h = max(faces, key=lambda f: f[2] * f[3])[:4]
-            boxes.append((float(max(x, 0) / W), float(max(y, 0) / H), float(w / W), float(h / H)))
+            bx = (float(max(x, 0) / W), float(max(y, 0) / H), float(w / W), float(h / H))
+            boxes.append(bx)
+            timed_pts.append((t, bx[0] + bx[2] / 2))
+        t += 0.5
     cap.release()
-    return boxes, samples
+    return (timed_pts, samples) if timed else (boxes, samples)
+
+
+def _ema_smooth(pts: list[tuple[float, float]], alpha: float,
+                sw: int, cw: int) -> list[tuple[float, int]]:
+    """Apply EMA to (time, cx_frac) pairs and convert to (time, pixel_x) crop offsets."""
+    if not pts:
+        return []
+    smoothed = []
+    ema_x = pts[0][1]
+    for t, cx in pts:
+        ema_x = alpha * cx + (1 - alpha) * ema_x
+        px = int(min(max(ema_x * sw - cw / 2, 0), sw - cw))
+        smoothed.append((t, px))
+    return smoothed
+
+
+def _track_crop_expr(track: list[tuple[float, int]], seg_start: float) -> str:
+    """Build an ffmpeg eval expression for the linearly-interpolated crop x offset."""
+    if not track:
+        return "0"
+    pts = [(t - seg_start, x) for t, x in track]
+    if len(pts) == 1:
+        return str(pts[0][1])
+    # Build nested if(lt(t, t_i), lerp(x_prev, x_i, ...), ...)
+    expr = str(pts[-1][1])
+    for (t0, x0), (t1, x1) in reversed(list(zip(pts[:-1], pts[1:]))):
+        dt = max(t1 - t0, 0.01)
+        lerp = f"({x0}+({x1}-{x0})*(t-{t0:.3f})/{dt:.3f})"
+        expr = f"if(lt(t,{t1:.3f}),{lerp},{expr})"
+    # Clamp to valid range before t0
+    expr = f"if(lt(t,{pts[0][0]:.3f}),{pts[0][1]},{expr})"
+    return expr
 
 
 def median(xs: list[float]) -> float:
@@ -58,36 +97,44 @@ def facecam_rect(boxes: list, info: dict, panel_aspect: float) -> list[float]:
 
 
 def pick_layout(cfg: dict, source: dict, video: Path, info: dict, start: float,
-                end: float) -> tuple[str, float | None, list[float] | None]:
-    """Returns (layout, face x for center crop, facecam rect for split).
-    auto: a small face that never moves is a facecam overlay -> split; a big, steady face -> center crop;
-    anything else -> fit, so the action is never cropped away."""
+                end: float) -> tuple[str, float | None, list[float] | None, list | None]:
+    """Returns (layout, median_cx, facecam_rect, timed_track).
+    timed_track is list[(t, cx_frac)] for center layout when track_face=True, else None."""
     rc = cfg["render"]
     layout = source.get("layout", "auto")
     if layout == "split" and source.get("facecam"):
-        return "split", None, source["facecam"]
+        return "split", None, source["facecam"], None
     if layout == "fit":
-        return "fit", None, None
-    boxes, samples = face_boxes(video, start, end)
-    ratio = len(boxes) / max(samples, 1)
-    cx = median([b[0] + b[2] / 2 for b in boxes]) if boxes else None
+        return "fit", None, None, None
+
+    want_track = rc.get("track_face", False) and layout in ("center", "auto")
+    if want_track:
+        timed, samples = face_boxes(video, start, end, timed=True)
+        boxes_for_static, _ = face_boxes(video, start, end)
+    else:
+        boxes_for_static, samples = face_boxes(video, start, end)
+        timed = None
+
+    ratio = len(boxes_for_static) / max(samples, 1)
+    cx = median([b[0] + b[2] / 2 for b in boxes_for_static]) if boxes_for_static else None
+
     if layout == "center":
-        return "center", cx, None
+        return "center", cx, None, timed
     if ratio >= rc["face_min_ratio"]:
-        xs = [b[0] + b[2] / 2 for b in boxes]
-        ys = [b[1] + b[3] / 2 for b in boxes]
-        spread = max(max(xs) - min(xs), max(ys) - min(ys)) if len(boxes) > 2 else 1.0
-        small = median([b[2] for b in boxes]) < rc["facecam_max_face"]
+        xs = [b[0] + b[2] / 2 for b in boxes_for_static]
+        ys = [b[1] + b[3] / 2 for b in boxes_for_static]
+        spread = max(max(xs) - min(xs), max(ys) - min(ys)) if len(boxes_for_static) > 2 else 1.0
+        small = median([b[2] for b in boxes_for_static]) < rc["facecam_max_face"]
         if small and spread < rc["facecam_max_spread"]:
             top_h = even(rc["height"] * rc["split_top_ratio"])
-            return "split", None, facecam_rect(boxes, info, rc["width"] / top_h)
+            return "split", None, facecam_rect(boxes_for_static, info, rc["width"] / top_h), None
         if not small:
-            return "center", cx, None
-    return "fit", None, None
+            return "center", cx, None, timed
+    return "fit", None, None, None
 
 
 def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam: list[float] | None,
-                  inp: str, out: str) -> str:
+                  inp: str, out: str, track: list | None = None, seg_start: float = 0.0) -> str:
     rc = cfg["render"]
     W, H = rc["width"], rc["height"]
     sw, sh = info["width"], info["height"]
@@ -115,9 +162,15 @@ def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam:
             f"[{out}t][{out}g]vstack,setsar=1[{out}]"
         )
     cw = min(sw, even(sh * W / H))
-    center = (cx if cx is not None else 0.5) * sw
-    x = int(min(max(center - cw / 2, 0), sw - cw))
-    return f"[{inp}]crop={cw}:{sh}:{x}:0,scale={W}:{H},setsar=1[{out}]"
+    # Dynamic tracking: EMA-smoothed crop expression if we have timed face data.
+    rc = cfg["render"]
+    if track and rc.get("track_face", False):
+        smoothed = _ema_smooth(track, rc.get("track_alpha", 0.15), sw, cw)
+        x_expr = _track_crop_expr(smoothed, seg_start)
+    else:
+        center = (cx if cx is not None else 0.5) * sw
+        x_expr = str(int(min(max(center - cw / 2, 0), sw - cw)))
+    return f"[{inp}]crop={cw}:{sh}:{x_expr}:0,scale={W}:{H},setsar=1[{out}]"
 
 
 def ass_time(t: float) -> str:
@@ -228,13 +281,16 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         if rc["cold_open"] and cold[0] is not None and cold[1] - cold[0] >= 0.5:
             segments.append((cold[0], cold[1], 0.0))
         segments.append((main[0], main[1], sum(e - s for s, e, _ in segments)))
-        layout, cx, cam = pick_layout(cfg, source, video, info, main[0], main[1])
+        layout, cx, cam, track = pick_layout(cfg, source, video, info, main[0], main[1])
+        if track:
+            log(f"  tracking: {len(track)} face samples")
         (cdir / "captions.ass").write_text(build_ass(cfg, clip, segments, layout))
 
         inputs, graph, concat = [], [], ""
         for i, (s, e, _) in enumerate(segments):
             inputs += ["-ss", f"{s:.2f}", "-t", f"{e - s:.2f}", "-i", video.resolve()]
-            graph.append(layout_filter(cfg, info, layout, cx, cam, f"{i}:v", f"l{i}"))
+            graph.append(layout_filter(cfg, info, layout, cx, cam, f"{i}:v", f"l{i}",
+                                       track=track, seg_start=s))
             concat += f"[l{i}][{i}:a:0]"
         audio = ",loudnorm=I=-14:TP=-1.5:LRA=11" if rc["loudnorm"] else ""
         graph.append(f"{concat}concat=n={len(segments)}:v=1:a=1[cv][ca0]")

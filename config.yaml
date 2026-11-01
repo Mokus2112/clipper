@@ -56,6 +56,8 @@ render:
   facecam_max_spread: 0.06  # ...if its centre moves less than this (fraction of frame) over the clip
   fit_zoom: 1.3           # fit layout: enlarge the centred frame and trim the sides a bit
   split_top_ratio: 0.365  # split layout: facecam 1080x700 on top
+  track_face: true        # center layout: follow the face with EMA-smoothed crop instead of a static median
+  track_alpha: 0.15       # EMA smoothing (lower = slower pan, less jitter)
 
 captions:
   font: Montserrat ExtraBold
