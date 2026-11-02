@@ -472,6 +472,28 @@ def top_text_hits(cdir: Path) -> list[tuple[float, tuple[int, int, int, int]]]:
         if (x0 is None or x0 > 40) and cv2.Canny(corner, 100, 200).mean() / 255 >= 0.02:
             out.append((t, (0, 0, 100, 170)))
     cap.release()
+    return out + edge_fragment_hits(cdir)
+
+
+def edge_fragment_hits(cdir: Path) -> list[tuple[float, tuple[int, int, int, int]]]:
+    """Per output frame: bright pixels (>200 and well above the local median) in the left-edge window x0-40, y80-180
+    (cut-off source letters). The source text drifts in time, so every frame is scanned."""
+    import cv2
+    video = cdir / "short.mp4"
+    if not video.exists():
+        return []
+    cap = cv2.VideoCapture(str(video))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    out, i = [], 0
+    while True:
+        ok, fr = cap.read()
+        if not ok:
+            break
+        g = cv2.cvtColor(fr[80:180, :40], cv2.COLOR_BGR2GRAY)
+        if int(((g > 200) & (g > np.median(g) + 20)).sum()) >= 8:
+            out.append((i / fps, (0, 0, 100, 170)))
+        i += 1
+    cap.release()
     return out
 
 
