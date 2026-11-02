@@ -867,6 +867,7 @@ def censor(word: str) -> str:
 # Strictest safe zone over YouTube Shorts, TikTok and Instagram Reels (1080x1920): keep text and
 # faces out of the top ~220 px, the bottom ~420 px and the right ~160 px (action buttons).
 SAFE_LEFT, SAFE_RIGHT_X = 90, 920
+HOOK_FLOOR = 60  # absolute minimum hook size (legacy long hooks only)
 SAFE_TOP = 220
 FACE_X = 475                              # close-up face centre x (left of the button column)
 CAP_X = (SAFE_LEFT + SAFE_RIGHT_X) // 2   # text centre, shifted left of the frame centre
@@ -1045,6 +1046,10 @@ def hook_events(cfg: dict, clip: dict, segments, shot_spans, fonts_dir, cap_font
     while size > hc.get("min_size", 80) and _width(font, text, size, hc.get("spacing", 0)) > avail:
         size -= 2
     tw = _width(font, text, size, hc.get("spacing", 0))
+    while size > HOOK_FLOOR and tw > avail:
+        # Hooks written before rank.py's length cap: shrink past min_size rather than leave the safe zone.
+        size -= 2
+        tw = _width(font, text, size, hc.get("spacing", 0))
     if tw > avail:
         log(f"  WARN hook {text!r} is {tw:.0f} px at {size} px, wider than {avail} px")
     ch = _cap_h(font, size)
@@ -1241,7 +1246,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         n_main, cuts_f = nframes[-1], []
         # clip["cut_gaps"]: [start, end] source ranges of sound that is not speech (breath, noise), cut like silence.
         wgaps = [tuple(g) for g in clip.get("cut_gaps", [])]
-        for ga, gb in sorted(wgaps + silence_runs(audio_fn, ms_, me_, min_len=GAP_MAX)):
+        for ga, gb in sorted(wgaps + ([] if clip.get("no_tighten") else silence_runs(audio_fn, ms_, me_, min_len=GAP_MAX))):
             if ga - ms_ < 0.25 or me_ - gb < 0.25:
                 continue
             f0 = -(-int((ga + GAP_KEEP - ms_) * fps) // r) * r
@@ -1380,7 +1385,9 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                          f"format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='{alpha}'[tb{k}c];"
                          f"[tb{k}a][tb{k}c]overlay={int(bx0)}:{int(by0)}:enable='between(t,{t0_:.2f},{t1_:.2f})'[tb{k}]")
             cap_in = f"tb{k}"
-        graph.append(f"[{cap_in}]split[cap_a][cap_b];[cap_b]fps=2,scale=540:960[nc]")
+        # round=up: with the default round=near the fps filter keeps the LAST input frame of each
+        # 0.5 s slot, so nocap frame i showed t=i/2+0.23 and QA placed caption shifts too early.
+        graph.append(f"[{cap_in}]split[cap_a][cap_b];[cap_b]fps=2:round=up,scale=540:960[nc]")
         cap_in = "cap_a"
         logo = source.get("logo")
         if logo:
