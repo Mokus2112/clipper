@@ -1344,7 +1344,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             if source.get("montage"):
                 fi = fo = 0.4  # music montage: fade the bed instead of cutting it mid-sound
             graph.append(f"[{i}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
-                         f"apad=whole_dur={nframes[i] / fps:.6f}[a{i}]")
+                         f"apad=whole_dur={a_dur:.6f},asetpts=PTS-STARTPTS,atrim=end={a_dur:.6f}[a{i}]")
             concat += f"[l{i}][a{i}]"
         # loudnorm alone let true peaks reach -0.7 dBFS; limiter at -3 dBFS leaves room for AAC overshoot (~1.5 dB).
         audio = ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=192000,alimiter=limit=0.708:level=false:attack=1:release=50,aresample=48000" if rc["loudnorm"] else ""
@@ -1421,6 +1421,8 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         if clip["id"] not in TOP_BLUR:
             blurs = plan_top_blur(cdir)
             TOP_BLUR[clip["id"]] = blurs
+            # Audio exactly as long as the output video frames (n_out / output fps): any difference lets -r 30 duplicate frames.
+            a_dur = n_out / float(rc["fps"]) if layout != "shots" and rc["fps"] else nframes[i] / fps
             if blurs:
                 log(f"  burned-in source text in the top strip, blurring: {blurs}")
                 prev = os.environ.get("CLIPPER_ONLY")
