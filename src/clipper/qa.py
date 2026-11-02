@@ -436,6 +436,64 @@ def plan_caption_shift(cdir: Path, fonts: Path) -> list[list[float]]:
     return out
 
 
+def top_text_hits(cdir: Path) -> list[tuple[float, tuple[int, int, int, int]]]:
+    """Source text burned into the top strip (y < 130, platform UI zone). (t, box in 1080x1920 coordinates).
+
+    Words are found by OCR; a cut-off fragment at the left edge by edge density in the corner.
+    """
+    import cv2
+    nocap = cdir / "nocap.mp4"
+    if not nocap.exists():
+        return []
+    cap = cv2.VideoCapture(str(nocap))
+    out, i = [], 0
+    while True:
+        ok, fr = cap.read()
+        if not ok:
+            break
+        t = i / 2
+        i += 1
+        band = cv2.cvtColor(fr[:65], cv2.COLOR_BGR2GRAY)
+        x0 = y0 = x1 = y1 = None
+        if cv2.Canny(band, 100, 200).mean() / 255 >= 0.004:
+            g = cv2.resize(band, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+            res = subprocess.run(["tesseract", "stdin", "stdout", "--psm", "6", "tsv"],
+                                 input=cv2.imencode(".png", g)[1].tobytes(), capture_output=True)
+            for row in res.stdout.decode(errors="ignore").splitlines()[1:]:
+                c = row.split("\t")
+                if len(c) == 12 and float(c[10]) >= 50 and re.search(r"[A-Za-z0-9]{2,}", c[11]):
+                    a, b = int(c[6]) // 3, int(c[7]) // 3
+                    e, f = a + int(c[8]) // 3, b + int(c[9]) // 3
+                    x0, y0 = (a, b) if x0 is None else (min(x0, a), min(y0, b))
+                    x1, y1 = (e, f) if x1 is None else (max(x1, e), max(y1, f))
+        corner = band[:, :40]
+        if x0 is not None:
+            out.append((t, (x0 * 2, y0 * 2, x1 * 2, y1 * 2)))
+        if (x0 is None or x0 > 40) and cv2.Canny(corner, 100, 200).mean() / 255 >= 0.02:
+            out.append((t, (0, 0, 80, 130)))
+    cap.release()
+    return out
+
+
+def plan_top_blur(cdir: Path) -> list[list[float]]:
+    """[t0, t1, x0, y0, x1, y1] spans (output seconds / pixels) to blur out burned-in source text in the top strip."""
+    spans: list[list[float]] = []
+    for t, b in top_text_hits(cdir):
+        sp = next((s_ for s_ in spans if t - 1.0 <= s_[1] and abs(b[0] - s_[2]) < 60 and abs(b[2] - s_[4]) < 120), None)
+        if sp:
+            sp[1] = t + 0.5
+            sp[2], sp[3] = min(sp[2], b[0]), min(sp[3], b[1])
+            sp[4], sp[5] = max(sp[4], b[2]), max(sp[5], b[3])
+        else:
+            spans.append([t - 0.5, t + 0.5, *b])
+    return [[max(0.0, a), b2, max(0, x0 - 24), max(0, y0 - 16), min(1080, x1 + 24), min(220, y1 + 16)]
+            for a, b2, x0, y0, x1, y1 in spans]
+
+
+def check_top_text(cdir: Path) -> list[str]:
+    return [f"burned-in source text in the top strip at {t:.1f}s box {b}" for t, b in top_text_hits(cdir)]
+
+
 def check_burned_text(cdir: Path, fonts: Path) -> list[str]:
     return [f"burned-in source text under captions at {t:.1f}s box y{b[1]}-{b[3]}: '{txt[:40]}'"
             for t, b, txt in burned_text_conflicts(cdir, fonts)]
@@ -458,5 +516,6 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
     problems += check_repeated_words(video, cdir / "captions.ass")
     problems += check_uncaptioned_speech(video, cdir / "captions.ass")
     problems += check_burned_text(cdir, path_of(cfg, "fonts"))
+    problems += check_top_text(cdir)
     (cdir / "qa.txt").write_text("\n".join(problems) + "\n" if problems else "ok\n")
     return problems

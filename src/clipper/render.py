@@ -844,6 +844,7 @@ FACE_X = 475                              # close-up face centre x (left of the 
 CAP_X = (SAFE_LEFT + SAFE_RIGHT_X) // 2   # text centre, shifted left of the frame centre
 
 
+TOP_BLUR: dict[str, list[list[float]]] = {}  # clip id -> [t0, t1, x0, y0, x1, y1] blurred patches (source text in the top strip)
 CAP_SHIFT: dict[str, list[list[float]]] = {}  # clip id -> [t0, t1, dy] caption moves (burned-in source text)
 
 
@@ -1021,6 +1022,11 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             # Old clips without forced alignment: fall back to onset pinning.
             words = refine_words(words, audio_fn, min(w["s"] for w in words) - 0.5, max(w["e"] for w in words) + 0.5)
             clip = {**clip, "words": words}
+        if words:
+            from .transcribe import snap_to_dips
+            lo_ = min(w["s"] for w in words) - 0.5
+            words = snap_to_dips(words, load_audio(video, lo_, max(w["e"] for w in words) + 0.5 - lo_), lo_)
+            clip = {**clip, "words": words}
         tol = 0.02 if clip.get("quotes") else 0.3
         main = snap_to_words(raw_words, clip["start"], clip["end"], sentence_end=True, max_trim=1.5,
                              audio_fn=audio_fn, timed=words, end_tol=tol)
@@ -1188,6 +1194,11 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         else:
             cap_in = "cv"
         # Caption-free low-res copy for the burned-in-text QA (same frames, no subtitles, no logo).
+        for k, (t0_, t1_, bx0, by0, bx1, by1) in enumerate(TOP_BLUR.get(clip["id"], [])):
+            bw_, bh_ = int(bx1 - bx0), int(by1 - by0)
+            graph.append(f"[{cap_in}]split[tb{k}a][tb{k}b];[tb{k}b]crop={bw_}:{bh_}:{int(bx0)}:{int(by0)},gblur=sigma=40:steps=4[tb{k}c];"
+                         f"[tb{k}a][tb{k}c]overlay={int(bx0)}:{int(by0)}:enable='between(t,{t0_:.2f},{t1_:.2f})'[tb{k}]")
+            cap_in = f"tb{k}"
         graph.append(f"[{cap_in}]split[cap_a][cap_b];[cap_b]fps=2,scale=540:960[nc]")
         cap_in = "cap_a"
         logo = source.get("logo")
@@ -1218,7 +1229,22 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         run([tool("ffmpeg"), "-v", "error", "-y", "-ss", min(3.0, (clip["end"] - clip["start"]) / 2),
              "-i", out.name, "-frames:v", "1", "-q:v", "3", "preview.jpg"], cwd=cdir)
         write_json(cdir / "clip.json", clip)
-        from .qa import plan_caption_shift, run_all
+        from .qa import plan_caption_shift, plan_top_blur, run_all
+        if clip["id"] not in TOP_BLUR:
+            blurs = plan_top_blur(cdir)
+            TOP_BLUR[clip["id"]] = blurs
+            if blurs:
+                log(f"  burned-in source text in the top strip, blurring: {blurs}")
+                prev = os.environ.get("CLIPPER_ONLY")
+                os.environ["CLIPPER_ONLY"] = clip["id"]
+                try:
+                    outputs += render(cfg, job_id)
+                finally:
+                    if prev is None:
+                        os.environ.pop("CLIPPER_ONLY", None)
+                    else:
+                        os.environ["CLIPPER_ONLY"] = prev
+                continue
         if clip["id"] not in CAP_SHIFT:
             shifts = plan_caption_shift(cdir, fonts)
             if shifts:

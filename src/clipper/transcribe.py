@@ -220,3 +220,35 @@ def snap_to_onsets(words: list[dict], audio: np.ndarray, lo: float, ref: list[di
         log(f"  onset snap: '{words[i]['w']}' {s:.2f} -> {o:.2f}")
         out[i]["s"] = round(o, 3)
     return out
+
+
+def snap_to_dips(words: list[dict], audio: np.ndarray, lo: float) -> list[dict]:
+    """A clear energy dip inside continuous speech (>= 7 dB under both sides) is a word boundary.
+    A word whose aligned start lies 40-200 ms after the dip's far edge starts there
+    ("rubbed | lemon": the caption was 100 ms late). Words only move earlier; order is kept."""
+    from .qa import _db_curve
+    db = _db_curve(audio)
+    n = len(db)
+    out = [dict(w) for w in words]
+    taken: set[int] = set()
+    for i in range(8, n - 12):
+        if not (db[i] <= db[i - 1] and db[i] < db[i + 1]):
+            continue
+        if min(db[max(0, i - 10):i].max(), db[i + 1:i + 11].max()) - db[i] < 7.0 or db[i] < -35.0:
+            continue
+        j = i
+        while j + 1 < n and db[j + 1] < db[i] + 8.0:
+            j += 1
+        if j - i < 1:
+            continue
+        o = lo + (j + 1) * 0.01
+        for k in range(1, len(out)):
+            if k in taken or not (0.04 < out[k]["s"] - o <= 0.2) or out[k - 1]["s"] >= o - 0.05:
+                continue
+            log(f"  dip snap: '{out[k]['w']}' {out[k]['s']:.2f} -> {o:.2f}")
+            out[k]["s"] = round(o, 3)
+            if out[k - 1]["e"] > o:
+                out[k - 1]["e"] = round(max(o - 0.01, out[k - 1]["s"] + 0.05), 3)
+            taken.add(k)
+            break
+    return out
