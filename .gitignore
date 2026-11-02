@@ -3,3 +3,4 @@ secrets/
 .venv/
 __pycache__/
 *.pyc
+models/face_recognition_sface_2021dec.onnx
