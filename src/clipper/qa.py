@@ -228,6 +228,18 @@ def check_caption_sync(video: Path, ass: Path) -> list[str]:
     return bad
 
 
+def check_caption_sync_words(video: Path, ass: Path) -> list[str]:
+    """Word-by-word sync from the shared meter (clipper.syncmeter): whisper on the finished audio is the
+    reference, confirmed by the audio-energy onset. Words where the two disagree are 'uncertain' and never fail."""
+    from .syncmeter import measure, summary
+    rows = measure(video, ass)
+    bad = [r for r in rows if r.verdict in ("late", "early")]
+    if not bad:
+        return []
+    shown = ", ".join(f"{r.word}@{r.cap:.2f} {r.d_whisper:+.0f}ms" for r in bad[:6])
+    return [f"caption sync (whisper+energy): {len(bad)} words off by more than 150 ms: {shown} [{summary(rows)}]"]
+
+
 def check_dead_air(video: Path, max_gap: float = 0.4) -> list[str]:
     """Silence over max_gap seconds between speech (not at the start or end of the clip)."""
     from .transcribe import load_audio
@@ -715,6 +727,7 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
         problems += check_dead_air(video)
         problems += check_caption_overlap(cdir / "captions.ass")
         problems += check_caption_sync(video, cdir / "captions.ass")
+        problems += check_caption_sync_words(video, cdir / "captions.ass")
         problems += check_caption_words(video, cdir / "captions.ass")
         problems += check_repeated_words(video, cdir / "captions.ass")
         problems += check_uncaptioned_speech(video, cdir / "captions.ass")
