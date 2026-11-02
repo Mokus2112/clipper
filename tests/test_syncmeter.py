@@ -45,3 +45,29 @@ def test_whisper_error_inside_um_is_uncertain():
     env = sm.envelope_db(_burst(4.0, 1.90, 2.6))
     r = sm.Row("FEELS", 1.76, 1.18, None, sm.energy_onset(env, 1.76, 0.2, 0.2))
     assert r.energy_at_cap is not None and r.uncertain and r.verdict == "uncertain"
+
+
+def _row(word, cap, wh, en, ec=None):
+    return sm.Row(word, cap, wh, en, ec)
+
+
+def test_group_onset_goes_to_one_word_only():
+    # clip-biralo #367: 24.74 repeated on THEY / SEEMED / COMPLETELY, 1.31 on THAT / FEELS
+    rows = [_row("THEY", 24.73, 24.78, 24.74), _row("SEEMED", 24.87, 24.92, 24.74),
+            _row("COMPLETELY", 25.02, 25.10, 24.74),
+            _row("THAT", 0.93, 0.92, 1.31), _row("FEELS", 1.76, 1.18, 1.31),
+            _row("OF", 16.35, 16.26, 16.74), _row("THEY2", 16.60, 16.56, 16.74)]
+    sm.assign_group_onsets(rows)
+    kept = {r.word: r.energy for r in rows}
+    assert kept["THEY"] == 24.74 and kept["SEEMED"] is None and kept["COMPLETELY"] is None
+    assert kept["FEELS"] == 1.31 and kept["THAT"] is None
+    assert kept["THEY2"] == 16.74 and kept["OF"] is None
+    values = [r.energy for r in rows if r.energy is not None]
+    assert len(values) == len(set(values))
+
+
+def test_word_without_onset_is_judged_by_whisper_alone():
+    r = _row("SEEMED", 24.87, 24.92, None)
+    assert not r.uncertain and r.verdict == "ok"
+    late = _row("LOSS", 11.11, 10.76, None)
+    assert late.verdict == "late"

@@ -129,6 +129,26 @@ def pair(cap: list[tuple[str, float]], heard: list[tuple[str, float]]) -> list[t
     return [(i1 + k, j1 + k) for tag, i1, i2, j1, _j2 in sm.get_opcodes() if tag == "equal" for k in range(i2 - i1)]
 
 
+def assign_group_onsets(rows: list[Row]) -> list[Row]:
+    """An energy onset after a pause belongs to ONE word: the burst's first word. Rows that found the same
+    onset (within 20 ms) keep it only on the row whose whisper start is nearest to it; the others get None
+    and are judged by whisper alone (clip-biralo #367: 1.31 x2, 24.74 x3, 16.74 x2, 21.24 x2)."""
+    for attr in ("energy", "energy_at_cap"):
+        ref = (lambda r: r.whisper) if attr == "energy" else (lambda r: r.cap)
+        groups: list[list[Row]] = []
+        for r in sorted((r for r in rows if getattr(r, attr) is not None), key=lambda r: getattr(r, attr)):
+            if groups and abs(getattr(groups[-1][-1], attr) - getattr(r, attr)) <= 0.02:
+                groups[-1].append(r)
+            else:
+                groups.append([r])
+        for g in groups:
+            keep = min(g, key=lambda r: abs(ref(r) - getattr(g[0], attr)))
+            for r in g:
+                if r is not keep:
+                    setattr(r, attr, None)
+    return rows
+
+
 def measure(video: Path, ass: Path) -> list[Row]:
     from .transcribe import load_audio
     from .qa import _duration
@@ -139,7 +159,7 @@ def measure(video: Path, ass: Path) -> list[Row]:
     for i, j in pair(cap, heard):
         rows.append(Row(cap[i][0], cap[i][1], heard[j][1], energy_onset(env, heard[j][1]),
                         energy_onset(env, cap[i][1], 0.2, 0.2)))
-    return rows
+    return assign_group_onsets(rows)
 
 
 def summary(rows: list[Row]) -> str:
