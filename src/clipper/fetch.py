@@ -1,5 +1,7 @@
 """Step 1: bring a VOD into a new job directory (download via yt-dlp or link a local file)."""
 
+import json
+import os
 import re
 import subprocess
 from datetime import datetime
@@ -61,9 +63,32 @@ def cut_section(jd: Path, section: str) -> None:
     part.rename(jd / "source.mp4")
 
 
+def video_id(url: str) -> str | None:
+    m = re.search(r"(?:v=|youtu\.be/|shorts/)([\w-]{11})", url)
+    return m.group(1) if m else None
+
+
+def used_video(cfg: dict, source_name: str, url: str) -> str | None:
+    """Job id that already used this YouTube video for this campaign source (None if unused)."""
+    vid = video_id(url)
+    if not vid:
+        return None
+    for jf in sorted((path_of(cfg, "data") / "jobs").glob(f"{source_name}-*/job.json")):
+        try:
+            if video_id(json.loads(jf.read_text()).get("input", "")) == vid:
+                return jf.parent.name
+        except Exception:
+            continue
+    return None
+
+
 def fetch(cfg: dict, source_name: str, url_or_path: str, section: str | None = None) -> str:
     source = find_source(cfg, source_name)
     job_id = f"{source_name}-{datetime.now():%Y%m%d-%H%M%S}"
+    prev = None if os.environ.get("CLIPPER_ALLOW_REUSE") else used_video(cfg, source_name, url_or_path)
+    if prev:
+        raise SystemExit(f"video {video_id(url_or_path)} already used for {source_name} in job {prev}; pick another "
+                         f"episode (CLIPPER_ALLOW_REUSE=1 to override)")
     jd = path_of(cfg, "data") / "jobs" / job_id
     jd.mkdir(parents=True)
 
