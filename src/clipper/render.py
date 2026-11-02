@@ -1137,6 +1137,14 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         layout, cx, cam, track = pick_layout(cfg, source, video, info, main[0], main[1])
         if track:
             log(f"  tracking: {len(track)} face samples")
+        if source.get("identity") and layout in ("center", "auto"):
+            st = face_boxes.last_identity
+            frac = st["locked"] / max(st["samples"], 1)
+            # Source-based error (Codee #184): the streamer is missing or someone else shares the frame.
+            if frac < 0.6 or st["other_faces"] > st["locked"] * 0.5:
+                log(f"  DROP {clip['id']}: identity '{source['identity']}' present in {frac:.0%} of samples, "
+                    f"{st['other_faces']} other faces vs {st['locked']} locked")
+                continue
         seg_shots, shot_spans = [], None
         if layout == "shots":
             shot_spans = []
