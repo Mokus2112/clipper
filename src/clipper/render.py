@@ -674,8 +674,14 @@ def merge_punct(words: list[dict]) -> list[dict]:
 _PROFANITY = re.compile(r"(?i)\b(motherf|f)u(ck\w*)|(?<![a-z])((?:bull)?sh)i(t\w*)|\b(b)i(tch\w*)|\b(c)u(nt\w*)")
 
 
-AUDIO_FADE_IN = 0.018   # s, fade in at the start of every segment
+AUDIO_FADE_IN = 0.04    # s, fade in at the start of every segment (card D: 40 ms on both edges; SNAP_PRE leaves 90 ms of pre-roll)
 AUDIO_FADE_OUT = 0.05   # s, fade out at the end of every segment (Whisper word ends run early)
+
+
+def audio_chain(idx: int, fi: float, fo: float, dur: float, a_dur: float) -> str:
+    """Per-segment audio filter: fades at both cut edges, padded/trimmed to the exact output length."""
+    return (f"[{idx}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
+            f"apad=whole_dur={a_dur:.6f},asetpts=PTS-STARTPTS,atrim=end={a_dur:.6f}")
 SNAP_PRE = 0.09         # s of pre-roll before the first word, never before the previous word's end
 SNAP_POST = 0.22        # s of tail after the last word, never past the next word's start - 0.05
 
@@ -1403,18 +1409,34 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                                        "face_tight" if sh.get("tight") else sh["kind"], geo))
         lg = source.get("logo") or {}
         cap_cfg = cfg if "caption_y" not in lg else {**cfg, "captions": {**cfg["captions"], "y_fit": lg["caption_y"], "y_center": lg["caption_y"]}}
-        (cdir / "captions.ass").write_text(build_ass(cap_cfg, clip, segments, layout, shot_spans, fonts))
-
-        inputs, graph, concat = [], [], ""
         # Segment audio comes from one sample-exact WAV: input seek on the video file loses audio on some sources.
         from .segaudio import extract_range
         seg_wav = cdir / "segments_audio.wav"
-        wav_t0 = extract_range(video, min(sg[0] for sg in segments), max(sg[1] for sg in segments), seg_wav)
+        # shots layout: the WAV audio inputs hang ffmpeg's filter graph (solved-091333-c2, 15+ min at 100% CPU,
+        # pre-G code 3 min); that layout keeps the audio of the video input (input seek) until this is understood.
+        wav_audio = layout != "shots"
+        wav_t0 = extract_range(video, min(sg[0] for sg in segments), max(sg[1] for sg in segments), seg_wav) if wav_audio else 0.0
+        if wav_audio and clip.get("words") and cfg["captions"].get("retime_from_audio", True):
+            # Forced alignment can sit 0.3-0.6 s off after fillers: move grossly misplaced words to the heard start.
+            try:
+                from .captionfix import heard_in_output, retime_words
+                cw = caption_words(merge_punct(clip["words"]))
+                fixed, moved = retime_words(cw, segments, heard_in_output(seg_wav, wav_t0, segments),
+                                           bias=cfg["captions"].get("sync_shift", 0.07))
+                if moved:
+                    log(f"{clip['id']}: retimed {len(moved)} caption words from the finished audio: {', '.join(moved[:12])}")
+                    clip = {**clip, "words": fixed}
+            except Exception as exc:  # noqa: BLE001 - the check must never block a render
+                log(f"{clip['id']}: caption retiming skipped ({exc})")
+        (cdir / "captions.ass").write_text(build_ass(cap_cfg, clip, segments, layout, shot_spans, fonts))
+
+        inputs, graph, concat = [], [], ""
         # -t half a frame short of n frames: exactly n video frames; audio is padded to n/fps.
         for i, (s, e, _) in enumerate(segments):
             inputs += ["-ss", f"{s:.6f}", "-t", f"{(nframes[i] - 0.5) / info['fps']:.6f}", "-i", video.resolve()]
-        for i, (s, e, _) in enumerate(segments):  # inputs len(segments)+i: the segment audio
-            inputs += ["-ss", f"{s - wav_t0:.6f}", "-t", f"{(nframes[i] - 0.5) / info['fps']:.6f}", "-i", seg_wav.resolve()]
+        if wav_audio:
+            for i, (s, e, _) in enumerate(segments):  # inputs len(segments)+i: the segment audio
+                inputs += ["-ss", f"{s - wav_t0:.6f}", "-t", f"{(nframes[i] - 0.5) / info['fps']:.6f}", "-i", seg_wav.resolve()]
         for i, (s, e, _) in enumerate(segments):
             fps = info["fps"]
             if layout == "shots":
@@ -1455,8 +1477,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             a_dur = n_out / float(rc["fps"]) if layout != "shots" and rc["fps"] else nframes[i] / fps
             if source.get("montage"):
                 fi = fo = 0.4  # music montage: fade the bed instead of cutting it mid-sound
-            graph.append(f"[{len(segments) + i}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
-                         f"apad=whole_dur={a_dur:.6f},asetpts=PTS-STARTPTS,atrim=end={a_dur:.6f}[a{i}]")
+            graph.append(audio_chain(len(segments) + i if wav_audio else i, fi, fo, dur, a_dur) + f"[a{i}]")
             concat += f"[l{i}][a{i}]"
         # loudnorm alone let true peaks reach -0.7 dBFS; limiter at -3 dBFS leaves room for AAC overshoot (~1.5 dB).
         audio = ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=192000,alimiter=limit=0.708:level=false:attack=1:release=50,aresample=48000" if rc["loudnorm"] else ""
