@@ -717,7 +717,8 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
             while t_ < stop:
                 t_ += 0.01
                 # 50 ms centered on the cut at <= -46 dB: a stop-consonant closure inside a word only dips to about -43
-                if level_db(audio_fn, t_ - 0.025, 0.05) <= END_QUIET_DB:
+                # and the last 60 ms stay clear of the word's decay (qa.check_segment_ends measures -35 dB there)
+                if level_db(audio_fn, t_ - 0.025, 0.05) <= END_QUIET_DB and level_db(audio_fn, t_ - 0.06, 0.06) <= -40.0:
                     e1 = t_
                     break
     return round(s0, 3), round(e1, 3)
@@ -926,7 +927,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
             pop_tag = f"{{\\fscx{int(pop*100)}\\fscy{int(pop*100)}\\t(0,80,\\fscx100\\fscy100)}}" if pop > 1.0 else ""
             for i, w in enumerate(chunk):
                 t0 = w["s"] if i else chunk[0]["s"]
-                t1 = chunk[i + 1]["s"] if i + 1 < len(chunk) else chunk[-1]["e"]
+                t1 = chunk[i + 1]["s"] if i + 1 < len(chunk) else chunk[-1]["e"] + 0.12  # a word's voiced tail outlasts its aligned end
                 if next_start is not None:
                     t1 = min(t1, next_start)  # two caption lines must never be on screen together
                 t0, t1 = max(t0, seg_s), min(t1, seg_e)
