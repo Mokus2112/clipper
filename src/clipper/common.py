@@ -56,6 +56,7 @@ def find_source(cfg: dict, name: str) -> dict:
 def run(cmd: list, **kw) -> subprocess.CompletedProcess:
     cmd = [str(c) for c in cmd]
     log("$ " + " ".join(cmd)[:300])
+    kw.setdefault("timeout", 1800)  # a hung ffmpeg (seen: 3.5 h at 100% CPU) must fail loudly, not stall the batch
     return subprocess.run(cmd, check=True, **kw)
 
 
