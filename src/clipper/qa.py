@@ -26,6 +26,9 @@ def _duration(video: Path) -> float:
 
 def text_boxes(cdir: Path, dur: float, fonts: Path, split: bool = False) -> list[tuple[float, tuple[int, int, int, int]]]:
     """Bounding box of all on-screen text (captions + hook) every 0.1 s, rendered alone on black."""
+    fdir = Path(fonts).resolve()
+    if not fdir.is_dir() or not any(fdir.glob("*.[ot]tf")):
+        raise RuntimeError(f"QA font dir missing or empty: {fdir}")  # never measure with a fallback font
     raw = subprocess.run(
         [tool("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", f"color=black:s=1080x1920:r=10:d={dur:.2f}",
          "-vf", f"subtitles=captions.ass:fontsdir={Path(fonts).resolve()},format=gray", "-f", "rawvideo", "-"],
@@ -639,6 +642,9 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
             source_starts: list[tuple[float, float]] = (), logo: tuple | None = None) -> list[str]:
     video = cdir / "short.mp4"
     problems = []
+    fdir = Path(path_of(cfg, "fonts")).resolve()
+    if not fdir.is_dir() or not any(fdir.glob("*.[ot]tf")):
+        return [f"QA font dir missing or empty ({fdir}): caption checks cannot be trusted"]
     problems += check_safe_zone(cdir, path_of(cfg, "fonts"))
     problems += check_caption_face(cdir, path_of(cfg, "fonts"))
     problems += check_segment_ends(audio_fn, source_ends)
