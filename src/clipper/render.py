@@ -1262,7 +1262,8 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                         os.environ["CLIPPER_ONLY"] = prev
                 continue
         problems = run_all(cfg, cdir, audio_fn, [(e_, off_ + e_ - s_) for s_, e_, off_ in segments],
-                           [(s_, off_) for s_, e_, off_ in segments])
+                           [(s_, off_) for s_, e_, off_ in segments],
+                           logo=((logo_box(Path(lg["file"]), int(lg.get("width", 340))), int(lg.get("y", 1360))) if lg.get("file") else None))
         if problems:
             # Known defect types never reach the reviewer: the clip stays out of the queue.
             log(f"  QA FAILED {clip['id']} ({len(problems)}), see qa.txt:")

@@ -499,8 +499,37 @@ def check_burned_text(cdir: Path, fonts: Path) -> list[str]:
             for t, b, txt in burned_text_conflicts(cdir, fonts)]
 
 
+def check_logo(cdir: Path, box: Path | None, y: int, samples: int = 12) -> list[str]:
+    """Mandated logo (Alliance) must be present and unblurred on every sampled frame: compare the
+    rendered region with the logo box image (sharpness and pixel difference)."""
+    if box is None:
+        return []
+    import cv2
+    ref = cv2.imread(str(box))
+    if ref is None:
+        return [f"logo: cannot read {box}"]
+    h, w = ref.shape[:2]
+    x = (1080 - w) // 2
+    ref = ref[: h // 2 * 2, : w // 2 * 2]  # yuv420 crops are even-sized
+    h, w = ref.shape[:2]
+    dur = _duration(cdir / "short.mp4")
+    out = []
+    for k in range(samples):
+        t = min(dur - 0.05, (k + 0.5) * dur / samples)
+        r = subprocess.run([tool("ffmpeg"), "-v", "error", "-ss", f"{t:.2f}", "-i", str(cdir / "short.mp4"), "-frames:v", "1",
+                            "-vf", f"crop={w}:{h}:{x}:{y}", "-f", "image2pipe", "-vcodec", "png", "-"], capture_output=True)
+        img = cv2.imdecode(np.frombuffer(r.stdout, np.uint8), cv2.IMREAD_COLOR)
+        if img is None or img.shape[:2] != (h, w):
+            out.append(f"logo: frame at {t:.1f}s unreadable")
+            continue
+        diff = float(np.abs(img.astype(np.int16) - ref.astype(np.int16)).mean())
+        if diff > 12:
+            out.append(f"logo: not intact at {t:.1f}s (mean diff {diff:.1f})")
+    return out
+
+
 def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, float]],
-            source_starts: list[tuple[float, float]] = ()) -> list[str]:
+            source_starts: list[tuple[float, float]] = (), logo: tuple | None = None) -> list[str]:
     video = cdir / "short.mp4"
     problems = []
     problems += check_safe_zone(cdir, path_of(cfg, "fonts"))
@@ -517,5 +546,7 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
     problems += check_uncaptioned_speech(video, cdir / "captions.ass")
     problems += check_burned_text(cdir, path_of(cfg, "fonts"))
     problems += check_top_text(cdir)
+    if logo:
+        problems += check_logo(cdir, *logo)
     (cdir / "qa.txt").write_text("\n".join(problems) + "\n" if problems else "ok\n")
     return problems
