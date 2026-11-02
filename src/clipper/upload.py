@@ -121,3 +121,43 @@ def set_privacy(cfg: dict, clip_id: str, privacy: str) -> str:
         from .notify import send_privacy_result
         send_privacy_result(cfg, clip_id, item["video_id"], actual)
     return actual
+
+
+def sync(cfg: dict) -> dict:
+    """Pull the real state of every uploaded clip from YouTube into the queue.
+
+    Badi can change privacy or delete videos in YouTube Studio; without this the dashboard
+    keeps showing stale data. Deleted videos move to the archive (status rejected,
+    deleted_on_youtube set) so counts match the channel.
+    """
+    from googleapiclient.discovery import build
+
+    uploaded = [i for i in review_queue.load(cfg) if i["status"] == "uploaded" and i.get("video_id")]
+    if not uploaded:
+        return {"checked": 0, "changed": 0, "deleted": 0}
+    yt = build("youtube", "v3", credentials=credentials(cfg, need=SCOPE_MANAGE, interactive=False))
+    found: dict[str, str] = {}
+    ids = [i["video_id"] for i in uploaded]
+    for n in range(0, len(ids), 50):
+        resp = yt.videos().list(part="status", id=",".join(ids[n:n + 50])).execute()
+        for v in resp.get("items", []):
+            found[v["id"]] = v["status"]["privacyStatus"]
+    # An empty answer for many ids is more likely an auth/API problem than a mass deletion.
+    if not found and len(ids) >= 3:
+        raise SystemExit(f"YouTube returned none of {len(ids)} videos; not marking anything deleted")
+    changed = deleted = 0
+    now = datetime.now().isoformat(timespec="seconds")
+    for i in uploaded:
+        vid = i["video_id"]
+        if vid not in found:
+            review_queue.set_status(cfg, i["id"], "rejected", deleted_on_youtube=now)
+            log(f"{i['id']}: video {vid} no longer on the channel, moved to archive")
+            deleted += 1
+        elif found[vid] != i.get("privacy"):
+            extra = {"privacy": found[vid]}
+            if found[vid] == "public" and not i.get("published_at"):
+                extra["published_at"] = now
+            review_queue.set_status(cfg, i["id"], "uploaded", **extra)
+            log(f"{i['id']}: privacy {i.get('privacy')} -> {found[vid]} (changed on YouTube)")
+            changed += 1
+    return {"checked": len(ids), "changed": changed, "deleted": deleted}

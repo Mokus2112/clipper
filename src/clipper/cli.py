@@ -33,6 +33,7 @@ def main() -> None:
     sub.add_parser("auth", help="run the YouTube OAuth flow and store the token")
     for name, h in (("publish", "make uploaded clips public"), ("unpublish", "make uploaded clips private")):
         sub.add_parser(name, help=h).add_argument("clip_ids", nargs="+")
+    sub.add_parser("sync", help="pull privacy/deleted state of uploaded clips from YouTube")
     s = sub.add_parser("notify", help="send pending clips to Telegram for review")
     s.add_argument("clip_ids", nargs="*")
     s = sub.add_parser("cleanup", help="delete source VODs, keep transcripts and rendered clips")
@@ -133,6 +134,10 @@ def main() -> None:
         from .upload import credentials, SCOPE_MANAGE
         credentials(cfg, need=SCOPE_MANAGE)  # re-consents if the token lacks a scope
         print("token stored")
+    elif a.cmd == "sync":
+        from .upload import sync
+        import json as _json
+        print(_json.dumps(sync(cfg)))
     elif a.cmd in ("publish", "unpublish"):
         from .upload import set_privacy
         target = "public" if a.cmd == "publish" else "private"
