@@ -74,7 +74,7 @@ captions:
   y_split: 820             # caption position in split layout (just under the seam)
   y_shots: 1000            # shots layout fallback
   y_shots_duo: 1000        # shots layout, stacked duo: just under the seam
-  y_shots_face: 1380       # shots layout, close-up: below the face, above the Shorts UI
+  y_shots_face: 1410       # shots layout, close-up: below the face, above the Shorts UI
   y_fit: 1400              # fit layout: below the centred frame, above the 420 px bottom UI zone (TikTok/Reels)
   pop: 1.0                 # 1.0 = no scale pop (Badi 2026-11-01: 1.12 looked jittery); word highlight colour stays
 
@@ -84,6 +84,7 @@ hook:
   seconds: 2.5
   size: 72
   y: 330
+  y_duo: 312          # stacked duo: top of the box at the safe zone edge, off the speaker's head
   y_face: 1180        # shots layout close-ups: over the chest, clear of the forehead and the captions
 
 music:

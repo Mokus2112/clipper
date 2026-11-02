@@ -422,17 +422,30 @@ def plan_caption_shift(cdir: Path, fonts: Path) -> list[list[float]]:
             spans.append([t - 0.5, t + 0.5])
     boxes = text_boxes(cdir, _duration(cdir / "short.mp4"), fonts, split=True)
     out = []
+    faces = face_boxes(cdir / "short.mp4", _duration(cdir / "short.mp4"))
     for a, b in spans:
-        inside = [bx for t, bx in boxes if a <= t <= b and bx[3] > 1100]
-        top, bot = min(bx[1] for bx in inside), max(bx[3] for bx in inside)
-        for dy in (-260, -400, -520, 240, 360):
+        inside = [(t, bx) for t, bx in boxes if a <= t <= b and bx[3] > 1100]
+        top, bot = min(bx[1] for _, bx in inside), max(bx[3] for _, bx in inside)
+        fallback = None
+        for dy in (-260, -400, -520, 240, 360, 120, 60):
             if top + dy < TOP or bot + dy > BOTTOM:
                 continue
             left = burned_text_conflicts(cdir, fonts, dy_at=lambda t, a=a, b=b, dy=dy: dy if a <= t <= b else 0,
                                            captions_only=True)
-            if all(not (a <= t <= b) for t, _, _ in left):
-                out.append([max(0.0, a), b, dy])
-                break
+            if any(a <= t <= b for t, _, _ in left):
+                continue
+            # The moved caption must not land on the speaker's face / beard either.
+            on_face = any(a - 0.25 <= ft <= b + 0.25 and bx[0] < fx1 and bx[2] > fx0
+                          and bx[3] + dy > fy0 and bx[1] + dy < fy1 * 1.0 + (fy1 - fy0) * FACE_BEARD_MARGIN
+                          for _, bx in inside for ft, (fx0, fy0, fx1, fy1) in faces)
+            if on_face:
+                fallback = fallback if fallback is not None else dy
+                continue
+            out.append([max(0.0, a), b, dy])
+            break
+        else:
+            if fallback is not None:
+                out.append([max(0.0, a), b, fallback])
     return out
 
 
@@ -472,7 +485,30 @@ def top_text_hits(cdir: Path) -> list[tuple[float, tuple[int, int, int, int]]]:
         if (x0 is None or x0 > 40) and cv2.Canny(corner, 100, 200).mean() / 255 >= 0.02:
             out.append((t, (0, 0, 100, 170)))
     cap.release()
-    return out + edge_fragment_hits(cdir)
+    return out + edge_fragment_hits(cdir) + dense_top_hits(cdir)
+
+
+def dense_top_hits(cdir: Path) -> list[tuple[float, tuple[int, int, int, int]]]:
+    """Every output frame (30 fps, not the 2 fps OCR samples): edges in the top 130 px mean burned-in source
+    text (flat backgrounds have none). Catches the 1-3 frames a title lingers between OCR samples."""
+    import cv2
+    video = cdir / "short.mp4"
+    if not video.exists():
+        return []
+    cap = cv2.VideoCapture(str(video))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    out, i = [], 0
+    while True:
+        ok, fr = cap.read()
+        if not ok:
+            break
+        e = cv2.Canny(cv2.cvtColor(fr[:130], cv2.COLOR_BGR2GRAY), 60, 150)
+        if e.mean() / 255 >= 0.003:
+            ys, xs = np.nonzero(e)
+            out.append((i / fps, (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))))
+        i += 1
+    cap.release()
+    return out
 
 
 def edge_fragment_hits(cdir: Path) -> list[tuple[float, tuple[int, int, int, int]]]:
@@ -519,7 +555,7 @@ def _is_persistent(sp: list[float], dur: float) -> bool:
 def plan_top_blur(cdir: Path) -> list[list[float]]:
     """[t0, t1, x0, y0, x1, y1] spans (output seconds / pixels) to blur out burned-in source text in the top strip."""
     dur = _duration(cdir / "short.mp4")
-    return [[max(0.0, a), b2, max(0, x0 - 40), max(0, y0 - 24), min(1080, x1 + 40), min(240, y1 + 24)]
+    return [[max(0.0, a), b2, max(0, x0 - 40), max(0, y0 - 40), min(1080, x1 + 40), min(240, y1 + 40)]
             for a, b2, x0, y0, x1, y1 in _raw_top_spans(cdir) if not _is_persistent([a, b2], dur)]
 
 
@@ -569,6 +605,7 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
     video = cdir / "short.mp4"
     problems = []
     problems += check_safe_zone(cdir, path_of(cfg, "fonts"))
+    problems += check_caption_face(cdir, path_of(cfg, "fonts"))
     problems += check_segment_ends(audio_fn, source_ends)
     problems += check_segment_starts(audio_fn, list(source_starts))
     problems += check_true_peak(video)
@@ -586,3 +623,42 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
         problems += check_logo(cdir, *logo)
     (cdir / "qa.txt").write_text("\n".join(problems) + "\n" if problems else "ok\n")
     return problems
+
+
+FACE_HAIR_MARGIN = 0.25
+FACE_OVERLAP_MIN_PX = 20   # ignore hair-tip / chin grazes below this
+FACE_BEARD_MARGIN = 0.04   # detector boxes stop near the chin; a little extra for the beard
+
+
+def caption_face_overlaps(cdir: Path, fonts: Path, step: float = 0.2) -> list[tuple[float, int]]:
+    """(t, overlap px) where a caption block sits on a speaker's face (box extended down for beard/jaw).
+    Checks every `step` s, the caption block and the hook alike."""
+    import cv2
+    video = cdir / "short.mp4"
+    dur = _duration(video)
+    det = cv2.FaceDetectorYN.create(str(ROOT / "models" / "face_detection_yunet_2023mar.onnx"), "",
+                                    (540, 960), 0.8, 0.3, 50)
+    cap = cv2.VideoCapture(str(video))
+    out = []
+    for t, (x0, y0, x1, y1) in text_boxes(cdir, dur, fonts, split=True):
+        if abs(t / step - round(t / step)) > 0.01:
+            continue
+        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+        ok, fr = cap.read()
+        if not ok:
+            continue
+        _, faces = det.detect(cv2.resize(fr, (540, 960)))
+        for f in faces if faces is not None else []:
+            fx, fy, fw, fh = (float(v) * 2 for v in f[:4])
+            if fw < 1080 * SPEAKER_FACE_W:
+                continue
+            fb = fy + fh * (1 + FACE_BEARD_MARGIN)
+            ft = fy + fh * FACE_HAIR_MARGIN   # the detector box includes hair; a hook grazing the hair is fine
+            if x1 > fx and x0 < fx + fw and y1 > ft and y0 < fb:
+                out.append((t, int(min(y1, fb) - max(y0, ft))))
+    cap.release()
+    return out
+
+
+def check_caption_face(cdir: Path, fonts: Path) -> list[str]:
+    return [f"caption/hook on the speaker's face at {t:.1f}s (overlap {ov}px)" for t, ov in caption_face_overlaps(cdir, fonts) if ov >= FACE_OVERLAP_MIN_PX]

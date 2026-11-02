@@ -902,7 +902,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
         cold = clip.get("cold_len", segments[0][1] - segments[0][0] if len(segments) > 1 else 0.0)
         # Per shot like the captions: over the chest on close-ups (the top of the frame is the
         # forehead there), at the top on duo/fit shots.
-        hook_y = {"face": hc.get("y_face", hc["y"]), "face_tight": hc["y"], "duo": hc["y"], "fit": hc["y"]}
+        hook_y = {"face": hc.get("y_face", hc["y"]), "face_tight": hc["y"], "duo": hc.get("y_duo", hc["y"]), "fit": hc["y"]}
         spans = shot_spans or [(0.0, 1e9, "")]
         t_end = cold + hc["seconds"]
         for a, b, kind in spans:
@@ -1208,7 +1208,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             dist = terms[0]
             for t_ in terms[1:]:
                 dist = f"min({dist},{t_})"
-            alpha = f"255*min(1,{dist}/24)"
+            alpha = f"255*min(1,{dist}/56)"
             graph.append(f"[{cap_in}]split[tb{k}a][tb{k}b];[tb{k}b]crop={bw_}:{bh_}:{int(bx0)}:{int(by0)},gblur=sigma=40:steps=4,"
                          f"format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='{alpha}'[tb{k}c];"
                          f"[tb{k}a][tb{k}c]overlay={int(bx0)}:{int(by0)}:enable='between(t,{t0_:.2f},{t1_:.2f})'[tb{k}]")
