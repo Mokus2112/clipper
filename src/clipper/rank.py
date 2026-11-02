@@ -100,6 +100,25 @@ def ask_claude(cfg: dict, prompt: str, cwd) -> str:
     return res.stdout
 
 
+def _earlier_spans(jd, job_id: str) -> list[dict]:
+    """Spans of clips already cut from the same video by other jobs (same input URL): never cut them twice."""
+    try:
+        me = read_json(jd / "job.json")["input"]
+    except Exception:
+        return []
+    out = []
+    for other in jd.parent.glob("*/job.json"):
+        if other.parent == jd:
+            continue
+        try:
+            if read_json(other)["input"] != me:
+                continue
+            out += [c for c in read_json(other.parent / "clips.json") if "start" in c]
+        except Exception:
+            continue
+    return out
+
+
 def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
     rc, cc = cfg["rank"], cfg["clip"]
     min_score = rc["min_score"] if min_score is None else min_score
@@ -137,6 +156,7 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
     from .anchors import find_quote, segment_words
     seg_words = segment_words(segments)
     clips = []
+    earlier = _earlier_spans(jd, job_id)
     for p in sorted(picks, key=lambda p: -p.get("score", 0)):
         if p.get("score", 0) < min_score or len(clips) >= rc["clips_per_vod"]:
             continue
@@ -161,6 +181,9 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
             continue
         if any(start < c["end"] and end > c["start"] for c in clips):
             continue  # overlapping pick from two transcript parts
+        if any(start < c["end"] and end > c["start"] for c in earlier):
+            log(f"dropping pick '{p.get('title', '')[:50]}': overlaps a clip from an earlier job of the same video")
+            continue
         ps, pe = p["payoff_start"], p["payoff_end"]
         clips.append({
             "id": f"{job_id}-c{len(clips) + 1}",
