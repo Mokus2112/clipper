@@ -929,6 +929,8 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
         t_end = cold + hc["seconds"]
         for a, b, kind in spans:
             lo, hi = max(0.0, a), min(t_end, b)
+            if kind == "duo" and hc.get("skip_duo", True):
+                continue  # the duo box always lands on the upper speaker's head (reviewer FAIL 131638-c1)
             if hi - lo > 0.005:
                 lines.append(
                     f"Dialogue: 1,{ass_time(lo)},{ass_time(hi)},Hook,,0,0,0,,"
@@ -959,6 +961,8 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
                 parts = [f"{{\\c{cc['highlight']}}}{t}{{\\c{cc['color']}}}" if j == i else t
                          for j, t in enumerate(texts)]
                 for a, b, yy in placed(t0 - seg_s + off, t1 - seg_s + off):
+                    if b - a < 0.03:
+                        continue  # a sliver flashes one frame at a cut, lit during silence
                     lines.append(
                         f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Cap,,0,0,0,,"
                         f"{{\\pos({CAP_X},{yy})}}{pop_tag}{' '.join(parts)}"
