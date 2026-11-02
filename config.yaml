@@ -241,7 +241,7 @@ sources:
     tags: [aisafety, ai, airisk]
     credit: "Source: public interview footage from the Alliance for Secure AI content bank"
     required_text: ""
-    logo: {file: data/alliance/logo1.png, width: 315, y: 1340, caption_y: 1180}
+    logo: {file: data/alliance/logo1.png, width: 315, y: 1420, caption_y: 1290}
     rank_notes: >-
       Topic must be AI risks/dangers. Use words like could, might, maybe where the speaker hedges; never state
       predictions as facts. Start on the quoted hook line, end on a complete sentence. 10-40 seconds.
