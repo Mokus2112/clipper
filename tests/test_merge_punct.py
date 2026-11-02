@@ -26,3 +26,7 @@ def test_number_glue_extends_end_time():
 def test_normal_words_untouched():
     assert texts([w("I", 0, .1), w("had", .1, .2), w("17,", .2, .4), w("then", .4, .6)]) == ["I", "had", "17,", "then"]
     assert texts([w("50", 0, .2), w("%", .2, .3)]) == ["50%"]
+
+
+def test_year_followed_by_number_not_glued():
+    assert texts([w("1999,", 0, .3), w("200", .3, .6)]) == ["1999,", "200"]

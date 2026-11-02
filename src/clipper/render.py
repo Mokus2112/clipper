@@ -621,7 +621,7 @@ def _number_tail(prev: str, cur: str) -> bool:
     """True when cur continues a number split by the tokenizer: '17' ',500' or '17,' '500'."""
     if re.search(r"\d$", prev) and re.fullmatch(r"[.,]\d+[%\w]*", cur):
         return True
-    return bool(re.fullmatch(r"\d[\d.,]*[.,]", prev) and re.fullmatch(r"\d{3}\b[%\w]*", cur))
+    return bool(re.fullmatch(r"\d{1,3}([.,]\d{3})*[.,]", prev) and re.fullmatch(r"\d{3}\b[%\w]*", cur))
 
 
 def merge_punct(words: list[dict]) -> list[dict]:
