@@ -667,7 +667,32 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
     if logo:
         problems += check_logo(cdir, *logo)
     (cdir / "qa.txt").write_text("\n".join(problems) + "\n" if problems else "ok\n")
+    log_qa(cdir, problems)
     return problems
+
+
+def qa_check_name(problem: str) -> str:
+    """A stable check label from a problem line: drop times, pixels and counts."""
+    return re.sub(r"\s+", " ", re.sub(r"[\d.]+|\(.*?\)|@\S*", "", problem)).strip()[:60]
+
+
+def log_qa(cdir: Path, problems: list[str]) -> None:
+    """Append one QA result to data/qa_log.jsonl (qa.txt gets overwritten on every render)."""
+    import json
+    from datetime import datetime
+    try:
+        job = json.loads((cdir.parents[1] / "job.json").read_text())
+    except (OSError, ValueError):
+        job = {}
+    m = re.search(r"-v(\d+)$", cdir.name)
+    rec = {"ts": datetime.now().isoformat(timespec="seconds"), "clip_id": cdir.name,
+           "version": int(m.group(1)) if m else 1, "source_url": job.get("input"),
+           "campaign": job.get("source"), "ok": not problems,
+           "failed_checks": sorted({qa_check_name(p) for p in problems})}
+    out = ROOT / "data" / "qa_log.jsonl"
+    out.parent.mkdir(exist_ok=True)
+    with out.open("a") as f:
+        f.write(json.dumps(rec) + "\n")
 
 
 FACE_HAIR_MARGIN = 0.25
