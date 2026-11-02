@@ -4,6 +4,7 @@ Each check returns a list of problems (empty = ok). See data/campaigns/LESSONS.m
 """
 
 import re
+from difflib import SequenceMatcher
 import subprocess
 from pathlib import Path
 
@@ -266,7 +267,9 @@ def check_caption_words(video: Path, ass: Path) -> list[str]:
         if re.fullmatch(r"(twen|thir|for|fif|six|seven|eigh|nine)ties", n):  # whisper writes 'nineties' as '90s'
             alts.add({"twen": "20", "thir": "30", "for": "40", "fif": "50", "six": "60", "seven": "70",
                       "eigh": "80", "nine": "90"}[n[:-4]] + "s")
-        if not any((h in alts or h == n or h.startswith(n[:4])) and abs(t - s0) <= 1.5 for h, t in heard):
+        # Spelling variants of names (name_fixes: McArthur captioned, whisper writes MacArthur).
+        close = lambda h: len(n) >= 6 and SequenceMatcher(None, h, n).ratio() >= 0.85  # noqa: E731
+        if not any((h in alts or h == n or h.startswith(n[:4]) or close(h)) and abs(t - s0) <= 1.5 for h, t in heard):
             missing.append(f"{w}@{s0:.2f}")
     missing = sorted(set(missing))
     return [f"caption words not heard in the audio: {', '.join(missing[:8])}"] if len(missing) >= 2 else []

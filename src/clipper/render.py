@@ -466,6 +466,47 @@ def face_frame(shot: dict, info: dict, W: int = 1080, H: int = 1920) -> dict:
     return {"ch": even(ch), "y0": even(y0), "ft_out": t, "fb_out": b, "tight": True}
 
 
+HOOK_BH_EST = 130  # hook box height estimate at the default size, for layout decisions before the ASS pass
+
+
+def hook_window_fit(cfg: dict, info: dict, plan: list[dict], off: float, seg_len: float,
+                    hook_end: float) -> list[dict]:
+    """Close-ups inside the hook window with no head-free room for the hook become 'fit' shots.
+
+    A face that fills the frame leaves no slot above the hair or under the chin, so the hook would
+    only appear on a later shot (reviewer FAIL 080536-c2: hook at 3.0 s for 1.1 s). The whole frame
+    over the blurred copy leaves the top clear. A shot running well past the window is split there,
+    so the close-up comes back as a punch-in.
+    """
+    cap_top = cfg["captions"].get("y_shots_face", 1410) - 60
+    fps, out = info["fps"], []
+    for sh in plan:
+        a = off + sh["f0"] / fps
+        if sh["kind"] != "face" or "ft_out" not in sh or a >= hook_end - 0.3:
+            out.append(sh)
+            continue
+        ft, fb = sh["ft_out"], sh["fb_out"]
+        above = SAFE_TOP + HOOK_BH_EST <= ft - (HOOK_HAIR * (fb - ft) + 10)
+        below = fb + 40 + HOOK_BH_EST + HOOK_CAP_GAP <= cap_top
+        if above or below:
+            out.append(sh)
+            continue
+        cut = round((hook_end - off) * fps)
+        whole = {k: v for k, v in sh.items() if k != "tight"} | {"kind": "fit"}
+        f_end = sh["f1"] if sh["f1"] is not None else round(seg_len * fps)
+        if f_end - cut < 0.3 * fps:
+            log(f"  hook window: close-up at {a:.2f}s shown whole (no head-free hook slot)")
+            out.append(whole)
+            continue
+        log(f"  hook window: close-up at {a:.2f}s shown whole until {hook_end:.2f}s, then punch-in")
+        first = {**whole, "f1": cut, "t1": sh["t0"] + (cut - sh["f0"]) / fps}
+        first.pop("hold_tail", None)
+        rest = {**sh, "f0": cut, "t0": first["t1"]}
+        rest.pop("hold_lead", None)
+        out += [first, rest]
+    return out
+
+
 def push_cap(cfg: dict, shot: dict) -> float:
     """Push-in cap for a close-up whose chin would otherwise reach the captions (anchor SAFE_TOP)."""
     cap = cfg["render"].get("push_in_max", 1.0)
@@ -867,7 +908,7 @@ def censor(word: str) -> str:
 # Strictest safe zone over YouTube Shorts, TikTok and Instagram Reels (1080x1920): keep text and
 # faces out of the top ~220 px, the bottom ~420 px and the right ~160 px (action buttons).
 SAFE_LEFT, SAFE_RIGHT_X = 90, 920
-HOOK_FLOOR = 60  # absolute minimum hook size (legacy long hooks only)
+HOOK_FLOOR = 80  # absolute minimum hook size (legacy long hooks only)
 SAFE_TOP = 220
 FACE_X = 475                              # close-up face centre x (left of the button column)
 CAP_X = (SAFE_LEFT + SAFE_RIGHT_X) // 2   # text centre, shifted left of the frame centre
@@ -879,6 +920,8 @@ CAP_SHIFT: dict[str, list[list[float]]] = {}  # clip id -> [t0, t1, dy] caption 
 
 HOOK_BAR = 10          # yellow accent bar at the left edge of the hook box, px
 HOOK_HAIR = 0.35       # close-up: hair above the face box, as a share of the face height
+HOOK_DUO_GAP = 140     # duo: hook centre above the duo caption centre (reviewer: >= 140 centre gap)
+H_HALF = 960           # duo seam (output px): the hook stays in the upper panel
 HOOK_CAP_GAP = 90      # min px between the hook box bottom and the caption top (reviewer: >= 140 centre gap)
 
 
@@ -936,17 +979,39 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
     outline, shadow = cc["outline"], cc.get("shadow", 2)
     bold = -1 if cc.get("bold", True) else 0
 
+    MIN_PART = 0.12  # a caption piece shorter than this (< 4 frames) reads as a jump/duplicate
+
     def placed(t0: float, t1: float) -> list[tuple[float, float, int]]:
         parts = placed_base(t0, t1)
+        if len(parts) > 1:
+            # A sliver across a shot cut (usually the word's silent tail or a lead-in) is dropped,
+            # not shown in a second place: the line never repeats at two positions.
+            long_ = [p for p in parts if p[1] - p[0] >= MIN_PART]
+            parts = long_ or [max(parts, key=lambda p: p[1] - p[0])]
         shifts = CAP_SHIFT.get(clip.get("id"), [])
         if not shifts:
             return parts
         out = []
         for lo, hi, yy in parts:
             cuts = sorted({lo, hi} | {c for a, b, _ in shifts for c in (a, b) if lo < c < hi})
+            pieces = []
             for u, v in zip(cuts, cuts[1:]):
                 dy = next((d for a, b, d in shifts if a <= (u + v) / 2 <= b), 0)
-                out.append((u, v, int(yy + dy)))
+                pieces.append([u, v, int(yy + dy)])
+            # Shift spans come from a 0.5 s grid, so their edges miss the cut by a few frames:
+            # a short piece inside one shot joins its longer neighbour instead of jumping for 2 frames.
+            merged = True
+            while merged and len(pieces) > 1:
+                merged = False
+                for i, (u, v, _y) in enumerate(pieces):
+                    if v - u < MIN_PART:
+                        j = i - 1 if i == len(pieces) - 1 or (i > 0 and pieces[i - 1][1] - pieces[i - 1][0]
+                                                               >= pieces[i + 1][1] - pieces[i + 1][0]) else i + 1
+                        pieces[j][0], pieces[j][1] = min(pieces[j][0], u), max(pieces[j][1], v)
+                        del pieces[i]
+                        merged = True
+                        break
+            out += [tuple(p) for p in pieces]
         return out
 
     def placed_base(t0: float, t1: float) -> list[tuple[float, float, int]]:
@@ -1003,7 +1068,6 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
             pop_tag = f"{{\\fscx{int(pop*100)}\\fscy{int(pop*100)}\\t(0,80,\\fscx100\\fscy100)}}" if pop > 1.0 else ""
             chunk_t0 = max(chunk[0]["s"] - lead, seg_s)
             chunk_t1 = min(chunk[-1]["e"] + 0.12, next_start if next_start is not None else 1e9, seg_e)
-            fade_tag = f"\\fad({fade},0)" if fade and chunk_t1 - chunk_t0 >= 0.2 else ""
             first = True
             for i, w in enumerate(chunk):
                 t0 = w["s"] if i else chunk_t0
@@ -1018,6 +1082,8 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
                 else:
                     on, off_ = f"{{\\c{cc['highlight']}}}", f"{{\\c{cc['color']}}}"
                 parts = [f"{on}{t}{off_}" if j == i else t for j, t in enumerate(texts)]
+                # No fade on a word shown < 0.2 s: it would spend most of its frames half-transparent.
+                fade_tag = f"\\fad({fade},0)" if fade and t1 - t0 >= 0.2 else ""
                 for a, b, yy in placed(t0 - seg_s + off, t1 - seg_s + off):
                     if b - a < 0.05:
                         continue  # a sliver flashes one frame at a cut, lit during silence
@@ -1059,8 +1125,14 @@ def hook_events(cfg: dict, clip: dict, segments, shot_spans, fonts_dir, cap_font
 
     def slot(kind: str, geo: dict | None, lo: float, hi: float) -> float | None:
         """Box centre y for this span, None = no hook here."""
-        if kind == "duo" and hc.get("skip_duo", True):
-            return None  # the duo box always lands on the upper speaker's head (reviewer FAIL 131638-c1)
+        if kind == "duo":
+            # Never at the top: the box landed on the upper speaker's head (reviewer FAIL 131638-c1).
+            # Instead on the upper speaker's chest, HOOK_DUO_GAP above the duo caption line, if the
+            # chin is clear of the box.
+            yc = cc.get("y_shots_duo", 1000) - HOOK_DUO_GAP
+            if geo and "fb_top" in geo and yc - bh / 2 >= geo["fb_top"] + 40 and yc + bh / 2 <= H_HALF:
+                return yc
+            return None
         if not kind.startswith("face"):
             return hc["y"]
         if not geo:
@@ -1175,7 +1247,8 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         out = cdir / "short.mp4"
         from .transcribe import load_audio
         audio_fn = lambda t0, d: load_audio(video, t0, d)  # noqa: E731
-        clip = {**clip, "name_fixes": source.get("name_fixes", {})}
+        # Source-level fixes first, the clip's own win (MacArthur is right for the general, not for McArthur Wheeler).
+        clip = {**clip, "name_fixes": {**source.get("name_fixes", {}), **clip.get("name_fixes", {})}}
         raw_words = merge_punct(clip.get("words", []))
         words = raw_words
         if words and not clip.get("words_whisper"):
@@ -1286,8 +1359,9 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         seg_shots, shot_spans = [], None
         if layout == "shots":
             shot_spans = []
+            hook_end = clip["cold_len"] + cfg["hook"]["seconds"]
             for s_, e_, off_ in segments:
-                plan = plan_shots(video, info, s_, e_)
+                plan = hook_window_fit(cfg, info, plan_shots(video, info, s_, e_), off_, e_ - s_, hook_end)
                 seg_shots.append(plan)
                 for sh in plan:
                     # Output times from the frame-exact source boundaries.
@@ -1296,6 +1370,12 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                     b = off_ + (e_ - s_ if sh is plan[-1] else sh["f1"] / info["fps"])
                     geo = ({"ft": sh["ft_out"], "fb": sh["fb_out"], "cap": push_cap(cfg, sh),
                             "t0": out_frame_time(a, rc["fps"])} if sh["kind"] == "face" and "ft_out" in sh else None)
+                    if sh["kind"] == "duo":
+                        # Upper panel: where the upper speaker's chin lands (output px), for the hook slot.
+                        ph = rc["height"] // 2
+                        (_lw, lh, _lx, ly), _r = duo_panels(sh, info, rc["width"] / ph)
+                        fy, fh = sh["left"][1], sh["left"][3]
+                        geo = {"fb_top": ((fy + fh) * info["height"] - ly) * ph / lh}
                     shot_spans.append((out_frame_time(a, rc["fps"]), out_frame_time(b, rc["fps"]),
                                        "face_tight" if sh.get("tight") else sh["kind"], geo))
         lg = source.get("logo") or {}
@@ -1341,6 +1421,8 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                                            source=source if (source.get("campaign_url") or source.get("montage")) else None))
             # Short audio fades at every cut so word-boundary splices do not click.
             fi, fo, dur = AUDIO_FADE_IN, AUDIO_FADE_OUT, (nframes[i] - 0.5) / fps
+            # Audio exactly as long as the output video frames (n_out / output fps): any difference lets -r 30 duplicate frames.
+            a_dur = n_out / float(rc["fps"]) if layout != "shots" and rc["fps"] else nframes[i] / fps
             if source.get("montage"):
                 fi = fo = 0.4  # music montage: fade the bed instead of cutting it mid-sound
             graph.append(f"[{i}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
@@ -1421,8 +1503,6 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         if clip["id"] not in TOP_BLUR:
             blurs = plan_top_blur(cdir)
             TOP_BLUR[clip["id"]] = blurs
-            # Audio exactly as long as the output video frames (n_out / output fps): any difference lets -r 30 duplicate frames.
-            a_dur = n_out / float(rc["fps"]) if layout != "shots" and rc["fps"] else nframes[i] / fps
             if blurs:
                 log(f"  burned-in source text in the top strip, blurring: {blurs}")
                 prev = os.environ.get("CLIPPER_ONLY")
