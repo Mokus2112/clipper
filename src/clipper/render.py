@@ -352,7 +352,14 @@ def plan_shots(video: Path, info: dict, start: float, end: float) -> list[dict]:
                 if FACE_MIN_W and median(fws) < FACE_MIN_W:
                     shot.update(kind="fit")
                 else:
+                    near = [max((b for b in f if abs(b[0] + b[2] / 2 - cx) < 0.15),
+                                key=lambda b: b[2] * b[3], default=None) for f in with_faces]
+                    near = [b for b in near if b]
                     shot.update(kind="face", cx=cx)
+                    if near:
+                        shot["ft"] = median([b[1] for b in near])
+                        shot["fb"] = median([b[1] + b[3] for b in near])
+                        shot.update(face_frame(shot, info))
         shots.append(shot)
     cap.release()
     if shots:
@@ -400,7 +407,52 @@ def duo_panels(shot: dict, info: dict, aspect: float) -> tuple | None:
     return l, r
 
 
-def push_in(cfg: dict, fps: float, anchor: tuple[float, float] | None = None) -> str:
+FACE_BOTTOM_MAX = 1340   # close-up: chin (YuNet box bottom) must end above the captions (y1380)
+FACE_TOP_MIN = 300       # ... and the forehead stay below the top UI zone
+
+
+def face_frame(shot: dict, info: dict, W: int = 1080, H: int = 1920) -> dict:
+    """Crop (height ch, top y0, in source px) for a close-up so the face box ends above the captions.
+
+    Default is the top 90% of the frame. A very tight close-up (face box reaching y1500+) zooms out
+    toward the full frame height and shifts the window down (face moves up) until the box fits
+    FACE_TOP_MIN..FACE_BOTTOM_MAX. tight=True when it still does not fit or needed any change:
+    the hook then goes to the top and the push-in is capped by push_cap.
+    """
+    sh = info["height"]
+    ft, fb = shot["ft"] * sh, shot["fb"] * sh
+    best, ch0 = None, sh * FACE_CROP_H
+    def out(ch, y0):
+        k = H / ch
+        return (ft - y0) * k, (fb - y0) * k
+    base_top, base_bot = out(ch0, 0)
+    if base_bot <= FACE_BOTTOM_MAX:
+        return {"ch": even(ch0), "y0": 0, "ft_out": base_top, "fb_out": base_bot}
+    cands = []
+    for ch in [ch0 + (sh - ch0) * i / 10 for i in range(11)]:
+        for y0 in [i * (sh - ch) / 10 for i in range(11)]:
+            t, b = out(ch, y0)
+            if t >= FACE_TOP_MIN and b <= FACE_BOTTOM_MAX:
+                cands.append((ch, y0, t, b))
+    if cands:
+        ch, y0, t, b = max(cands, key=lambda c: c[0] * 1000 - c[1])  # least zoom-out, then least shift
+    else:  # does not fit: most zoomed out, window lowest, accept
+        ch = sh
+        y0 = 0
+        t, b = out(ch, y0)
+    return {"ch": even(ch), "y0": even(y0), "ft_out": t, "fb_out": b, "tight": True}
+
+
+def push_cap(cfg: dict, shot: dict) -> float:
+    """Push-in cap for a close-up whose chin would otherwise reach the captions (anchor SAFE_TOP)."""
+    cap = cfg["render"].get("push_in_max", 1.0)
+    fb = shot.get("fb_out")
+    if fb is None or fb <= SAFE_TOP:
+        return cap
+    return max(1.0, min(cap, (FACE_BOTTOM_MAX - SAFE_TOP) / (fb - SAFE_TOP)))
+
+
+def push_in(cfg: dict, fps: float, anchor: tuple[float, float] | None = None, cap: float | None = None) -> str:
     """Slow push-in from the first frame of a shot: zoom 1.0 + rate*t, capped.
 
     perspective resamples with sub-pixel precision (cubic), so the zoom does not step/jitter
@@ -409,8 +461,9 @@ def push_in(cfg: dict, fps: float, anchor: tuple[float, float] | None = None) ->
     sits at the top safe line so the forehead is not pushed into the top UI zone.
     """
     rc = cfg["render"]
-    rate, cap = rc.get("push_in_rate", 0.0), rc.get("push_in_max", 1.0)
-    if rate <= 0 or cap <= 1.0:
+    rate = rc.get("push_in_rate", 0.0)
+    cap = rc.get("push_in_max", 1.0) if cap is None else cap
+    if rate <= 0 or cap <= 1.001:
         return ""
     W, H = rc["width"], rc["height"]
     ax, ay = anchor or (W / 2, H / 2)
@@ -428,10 +481,11 @@ def shot_filter(cfg: dict, info: dict, shot: dict, inp: str, out: str) -> str:
         # Face left of centre (the right ~160 px are platform buttons), and only the top 90% of the
         # frame: shows put their logo in the bottom corner, which a full-height crop cut in half.
         sw, sh = info["width"], info["height"]
-        ch = even(sh * FACE_CROP_H)
+        ch = shot.get("ch") or even(sh * FACE_CROP_H)
+        y0 = shot.get("y0", 0)
         cw = min(sw, even(ch * W / H))
         x = int(min(max(shot["cx"] * sw - cw * FACE_X / W, 0), sw - cw))
-        return f"[{inp}]crop={cw}:{ch}:{x}:0,scale={W}:{H},setsar=1[{out}]"
+        return f"[{inp}]crop={cw}:{ch}:{x}:{y0},scale={W}:{H},setsar=1[{out}]"
     if shot["kind"] == "duo":
         ph = H // 2
         (lw, lh, lx, ly), (rw, rh, rx, ry) = duo_panels(shot, info, W / ph)
@@ -800,7 +854,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
     cc, hc, rc = cfg["captions"], cfg["hook"], cfg["render"]
     W, H = rc["width"], rc["height"]
     y = cc[f"y_{layout}"]
-    shot_y = {"face": cc.get("y_shots_face", y), "duo": cc.get("y_shots_duo", y), "fit": cc.get("y_fit", y)}
+    shot_y = {"face": cc.get("y_shots_face", y), "face_tight": cc.get("y_shots_face", y), "duo": cc.get("y_shots_duo", y), "fit": cc.get("y_fit", y)}
 
     def placed(t0: float, t1: float) -> list[tuple[float, float, int]]:
         if not shot_spans:
@@ -830,7 +884,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
         cold = clip.get("cold_len", segments[0][1] - segments[0][0] if len(segments) > 1 else 0.0)
         # Per shot like the captions: over the chest on close-ups (the top of the frame is the
         # forehead there), at the top on duo/fit shots.
-        hook_y = {"face": hc.get("y_face", hc["y"]), "duo": hc["y"], "fit": hc["y"]}
+        hook_y = {"face": hc.get("y_face", hc["y"]), "face_tight": hc["y"], "duo": hc["y"], "fit": hc["y"]}
         spans = shot_spans or [(0.0, 1e9, "")]
         t_end = cold + hc["seconds"]
         for a, b, kind in spans:
@@ -1049,7 +1103,8 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                     # Held edge frames belong to the first/last shot's layout.
                     a = off_ + (0.0 if sh is plan[0] else sh["f0"] / info["fps"])
                     b = off_ + (e_ - s_ if sh is plan[-1] else sh["f1"] / info["fps"])
-                    shot_spans.append((out_frame_time(a, rc["fps"]), out_frame_time(b, rc["fps"]), sh["kind"]))
+                    shot_spans.append((out_frame_time(a, rc["fps"]), out_frame_time(b, rc["fps"]),
+                                       "face_tight" if sh.get("tight") else sh["kind"]))
         lg = source.get("logo") or {}
         cap_cfg = cfg if "caption_y" not in lg else {**cfg, "captions": {**cfg["captions"], "y_fit": lg["caption_y"], "y_center": lg["caption_y"]}}
         (cdir / "captions.ass").write_text(build_ass(cap_cfg, clip, segments, layout, shot_spans))
@@ -1067,7 +1122,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 graph.append(f"[{i}:v]setpts=PTS-STARTPTS,split={k}" + "".join(f"[s{i}_{j}]" for j in range(k)))
                 for j, sh in enumerate(shots):
                     anchor = (FACE_X, SAFE_TOP) if sh["kind"] == "face" else (FACE_X, rc["height"] / 2)
-                    zoom = push_in(cfg, info["fps"], anchor)
+                    zoom = push_in(cfg, info["fps"], anchor, push_cap(cfg, sh) if sh["kind"] == "face" else None)
                     # Frame indices, not timestamps: rounding a time can move the switch by one frame.
                     end_opt = "" if sh["f1"] is None else f":end_frame={sh['f1']}"
                     graph.append(f"[s{i}_{j}]trim=start_frame={sh['f0']}{end_opt},setpts=PTS-STARTPTS[t{i}_{j}]")
