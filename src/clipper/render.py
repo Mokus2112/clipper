@@ -541,13 +541,12 @@ def chunk_words(words: list[dict], max_words: int, max_sec: float) -> list[list[
         cur.append(w)
     if cur:
         chunks.append(cur)
-    # A chunk on screen for less than MIN_CAPTION_SEC only flashes: merge it into a neighbour.
+    # A chunk on screen for less than MIN_CAPTION_SEC only flashes: merge it into a neighbour,
+    # but never past max_words (a merged 6-word line overflowed the safe width, 080536-c2).
     merged: list[list[dict]] = []
     for ch in chunks:
-        if merged and ch[-1]["e"] - ch[0]["s"] < MIN_CAPTION_SEC and ch[0]["s"] - merged[-1][-1]["e"] <= 0.6:
-            merged[-1] = merged[-1] + ch
-        elif merged and merged[-1][-1]["e"] - merged[-1][0]["s"] < MIN_CAPTION_SEC \
-                and ch[0]["s"] - merged[-1][-1]["e"] <= 0.6:
+        fits = bool(merged) and len(merged[-1]) + len(ch) <= max_words and ch[0]["s"] - merged[-1][-1]["e"] <= 0.6
+        if fits and (ch[-1]["e"] - ch[0]["s"] < MIN_CAPTION_SEC or merged[-1][-1]["e"] - merged[-1][0]["s"] < MIN_CAPTION_SEC):
             merged[-1] = merged[-1] + ch
         else:
             merged.append(ch)
