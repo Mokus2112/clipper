@@ -335,6 +335,43 @@ def check_repeated_words(video: Path, ass: Path) -> list[str]:
     return sorted(set(problems))
 
 
+def caption_gaps(db: np.ndarray, covered: np.ndarray, thr_db: float = -35.0, join: float = 0.15,
+                 min_gap: float = 0.25) -> list[tuple[float, float]]:
+    """(start, end) of speech with no caption on screen, longer than min_gap seconds (10 ms grid).
+
+    Uncaptioned speech runs separated by at most `join` s of silence count as one gap: a gap of
+    short syllables (each under the 0.3 s limit of check_uncaptioned_speech) is still a visible hole.
+    """
+    runs, i, n = [], 0, len(db)
+    while i < n:
+        if db[i] > thr_db and not covered[i]:
+            j = i
+            while j < n and db[j] > thr_db and not covered[j]:
+                j += 1
+            runs.append([i, j])
+            i = j
+        else:
+            i += 1
+    merged: list[list[int]] = []
+    for a, b in runs:
+        if merged and (a - merged[-1][1]) / 100 <= join and not covered[merged[-1][1]:a].any():
+            merged[-1][1] = b
+        else:
+            merged.append([a, b])
+    return [(a / 100, b / 100) for a, b in merged if (b - a) / 100 > min_gap]
+
+
+def check_caption_gaps(video: Path, ass: Path) -> list[str]:
+    """Speech for more than 0.25 s with no caption line on screen (measured on the finished audio)."""
+    from .transcribe import load_audio
+    db = _db_curve(load_audio(video, 0.0, _duration(video)))
+    covered = np.zeros(len(db), bool)
+    for s0, e0, _w in _highlights(ass):
+        covered[int(s0 * 100):int(e0 * 100) + 1] = True
+    gaps = caption_gaps(db, covered)
+    return [f"caption gap under speech: {', '.join(f'{a:.2f}-{b:.2f}' for a, b in gaps[:6])}"] if gaps else []
+
+
 def check_uncaptioned_speech(video: Path, ass: Path, thr_db: float = -35.0, min_len: float = 0.3) -> list[str]:
     """Speech (RMS above thr_db for min_len) with no caption line on screen."""
     from .transcribe import load_audio
@@ -681,6 +718,7 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
         problems += check_caption_words(video, cdir / "captions.ass")
         problems += check_repeated_words(video, cdir / "captions.ass")
         problems += check_uncaptioned_speech(video, cdir / "captions.ass")
+        problems += check_caption_gaps(video, cdir / "captions.ass")
         problems += check_burned_text(cdir, path_of(cfg, "fonts"))
         problems += check_top_text(cdir)
     if logo:
