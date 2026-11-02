@@ -154,6 +154,7 @@ sources:
     campaign_url: https://contentrewards.com/campaigns/4479e5e2-9a00-489e-8b0c-345834f37cc7
     platforms: [youtube, tiktok, instagram, x]   # campaign-allowed platforms (posts.md)
     layout: center         # IRL/stream: face-tracked crop; fit would show the overlays
+    identity: lacy         # models/ref_lacy.npy (clipper identity build): track only Lacy's face, not the largest one
     crop_h: 0.92           # drop the bottom strip (viewer count with Twitch/YouTube icons, sub goal)
     top_pad: 160           # IRL camera faces sit at the very top: keep them below the top UI zone
     avoid: [[0.72, 0.0, 0.28, 0.26]]   # chat overlay top right (x, y, w, h fractions)

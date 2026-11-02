@@ -12,8 +12,8 @@ def even(x: float) -> int:
     return int(x) // 2 * 2
 
 
-def face_boxes(video: Path, start: float, end: float, timed: bool = False
-               ) -> tuple[list, int]:
+def face_boxes(video: Path, start: float, end: float, timed: bool = False,
+               identity: str | None = None) -> tuple[list, int]:
     """Largest face per frame as (x, y, w, h) fractions of the frame, sampled twice per second.
     If timed=True, returns ([(t, cx_frac), ...], samples) for dynamic tracking."""
     import cv2
@@ -25,6 +25,13 @@ def face_boxes(video: Path, start: float, end: float, timed: bool = False
     boxes: list = []
     timed_pts: list[tuple[float, float]] = []
     samples = 0
+    ref = None
+    locked = others = 0
+    if identity:
+        from . import identity as idm
+        ref = idm.load_reference(identity)
+        if ref is None:
+            raise RuntimeError(f"identity '{identity}' has no reference (clipper identity build)")
     t = start
     while t < end:
         samples += 1
@@ -38,6 +45,19 @@ def face_boxes(video: Path, start: float, end: float, timed: bool = False
         small = cv2.resize(frame, None, fx=scale, fy=scale)
         H, W = small.shape[:2]
         detector.setInputSize((W, H))
+        if ref is not None:
+            # Identity lock: follow only the face that matches the streamer, never "the largest face".
+            from . import identity as idm
+            cands = idm.match_scores(frame, ref)
+            good = [(s_, b_) for s_, b_ in cands if s_ >= idm.LOCK_COS]
+            others += sum(1 for s_, _ in cands if s_ < idm.LOCK_COS)
+            if good:
+                bx = max(good, key=lambda c: c[0])[1]
+                boxes.append(bx)
+                timed_pts.append((t, bx[0] + bx[2] / 2))
+                locked += 1
+            t += 0.5
+            continue
         _, faces = detector.detect(small)
         if faces is not None and len(faces):
             x, y, w, h = max(faces, key=lambda f: f[2] * f[3])[:4]
@@ -46,6 +66,7 @@ def face_boxes(video: Path, start: float, end: float, timed: bool = False
             timed_pts.append((t, bx[0] + bx[2] / 2))
         t += 0.5
     cap.release()
+    face_boxes.last_identity = {"locked": locked, "other_faces": others, "samples": samples}
     return (timed_pts, samples) if timed else (boxes, samples)
 
 
@@ -127,10 +148,11 @@ def pick_layout(cfg: dict, source: dict, video: Path, info: dict, start: float,
 
     want_track = rc.get("track_face", False) and layout in ("center", "auto")
     if want_track:
-        timed, samples = face_boxes(video, start, end, timed=True)
-        boxes_for_static, _ = face_boxes(video, start, end)
+        ident = source.get("identity")
+        timed, samples = face_boxes(video, start, end, timed=True, identity=ident)
+        boxes_for_static, _ = face_boxes(video, start, end, identity=ident)
     else:
-        boxes_for_static, samples = face_boxes(video, start, end)
+        boxes_for_static, samples = face_boxes(video, start, end, identity=source.get("identity"))
         timed = None
 
     ratio = len(boxes_for_static) / max(samples, 1)
@@ -1161,7 +1183,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 # Each segment gets its own face track (the cold open lies outside the main range).
                 seg_track = track
                 if track and len(segments) > 1:
-                    seg_track, _ = face_boxes(video, s, e, timed=True)
+                    seg_track, _ = face_boxes(video, s, e, timed=True, identity=source.get("identity"))
                 # Cap at the exact output frame count: concat plus -r otherwise adds a frame per segment
                 # on a 60 fps source (video longer than audio).
                 n_out = round(nframes[i] * float(rc["fps"]) / info["fps"]) if rc["fps"] else nframes[i]

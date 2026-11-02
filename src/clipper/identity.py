@@ -13,13 +13,18 @@ ROOT = Path(__file__).resolve().parents[2]
 SFACE = ROOT / "models" / "face_recognition_sface_2021dec.onnx"
 SFACE_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
 YUNET = ROOT / "models" / "face_detection_yunet_2023mar.onnx"
-MATCH_COS = 0.363   # SFace's published cosine threshold for "same person"
+MATCH_COS = 0.363
+LOCK_COS = 0.40     # stricter than "same person": we lock the crop on this face, so avoid look-alikes   # SFace's published cosine threshold for "same person"
 
 
 def ref_path(name: str) -> Path:
     return ROOT / "models" / f"ref_{name}.npy"
 
 
+import functools
+
+
+@functools.lru_cache(maxsize=1)
 def _recognizer():
     import cv2
     if not SFACE.exists():
@@ -28,9 +33,15 @@ def _recognizer():
     return cv2.FaceRecognizerSF.create(str(SFACE), "")
 
 
-def _detector(w: int, h: int):
+@functools.lru_cache(maxsize=1)
+def _detector_obj():
     import cv2
-    d = cv2.FaceDetectorYN.create(str(YUNET), "", (w, h), 0.8, 0.3, 50)
+    return cv2.FaceDetectorYN.create(str(YUNET), "", (640, 360), 0.8, 0.3, 50)
+
+
+def _detector(w: int, h: int):
+    d = _detector_obj()
+    d.setInputSize((w, h))
     return d
 
 
