@@ -19,6 +19,10 @@ reaction, rage, fail, wholesome surprise, chaos). A stranger who has never seen 
 Hard rules:
 - Reject anything that needs earlier context, is just talking/driving/gameplay without a payoff,
   is music, ads, reading donations, or has no clear payoff inside the clip.
+- Also reject a clip if any of these holds: the key point is mumbled or unintelligible; sarcasm that flips the
+  literal meaning (a viewer without the tone would take it the opposite way); it ends without a payoff
+  (trails off, cuts before the answer); it cannot be understood without outside context (earlier events,
+  inside jokes, unnamed references); a disputed claim is stated as fact and the clip does not attribute it.
 - Clip length (start..end): {min_sec}-{max_sec} seconds. Absolute seconds from the transcript.
 - payoff_start/payoff_end: the 1.0-2.5 s peak moment INSIDE the clip (the scream, the punchline, the reaction).
   It is shown first as a cold open before the clip plays from the setup.
@@ -60,6 +64,50 @@ Transcript:
 """
 
 MAX_PROMPT_CHARS = 400_000
+
+CHECK_PROMPT = """You are a strict editorial checker for short-form clips. For each numbered transcript below,
+decide whether the clip must be REJECTED. Reject if ANY holds:
+1. mumble: the key point is mumbled, garbled or unintelligible in the transcript
+2. sarcasm: sarcasm flips the literal meaning, so a viewer without tone would understand the opposite
+3. no_payoff: the clip ends without a payoff (trails off, cuts before the answer or punchline)
+4. context: it cannot be understood by a stranger without outside context (earlier events, inside jokes)
+5. disputed: a disputed or unproven claim is stated as fact without attribution to the speaker
+If none holds, keep it. Be conservative: reject only when clearly true.
+
+Return ONLY a JSON array: [{{"n": 1, "reject": false, "rule": "", "reason": ""}}, ...] with one entry per clip.
+
+{items}
+"""
+
+
+def clip_text(segments: list[dict], start: float, end: float) -> str:
+    return " ".join(s["text"].strip() for s in segments if s["e"] > start and s["s"] < end)
+
+
+def content_check(cfg: dict, jd, clips: list[dict], segments: list[dict], ask=None) -> list[dict]:
+    """Second, cheap LLM pass over the selected transcripts: drop clips that hit a content exclusion.
+
+    Fails open: if the check itself errors, the clips are kept. Verdicts go to <job>/content_check.json.
+    """
+    if not clips or not cfg["rank"].get("content_check", True):
+        return clips
+    items = "\n\n".join(f"Clip {i + 1}:\n{clip_text(segments, c['start'], c['end'])}" for i, c in enumerate(clips))
+    cfg_c = {**cfg, "rank": {**cfg["rank"], "model": cfg["rank"].get("check_model", "haiku")}}
+    try:
+        out = (ask or ask_claude)(cfg_c, CHECK_PROMPT.format(items=items), jd)
+        verdicts = {int(v["n"]): v for v in extract_json(out)}
+    except Exception as exc:
+        log(f"content check failed ({exc}), keeping all clips")
+        return clips
+    write_json(jd / "content_check.json", [{"id": c["id"], **verdicts.get(i + 1, {})} for i, c in enumerate(clips)])
+    keep = []
+    for i, c in enumerate(clips):
+        v = verdicts.get(i + 1, {})
+        if v.get("reject"):
+            log(f"content check DROP {c['id']} ({v.get('rule', '?')}): {v.get('reason', '')}")
+        else:
+            keep.append(c)
+    return keep
 
 
 def format_transcript(segments: list[dict], spikes: list[dict]) -> str:
@@ -200,6 +248,7 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
             "score": p["score"],
             "reason": p.get("reason", ""),
         })
+    clips = content_check(cfg, jd, clips, segments)
     write_json(jd / "clips.json", clips)
     log(f"{len(clips)} clips selected (min score {min_score})")
     return clips
