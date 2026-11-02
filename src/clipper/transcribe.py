@@ -113,6 +113,9 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
         for ins in clip.get("word_inserts") or []:
             if not any(abs(w["s"] - ins["s"]) < 0.05 and w["w"].lower() == ins["w"].lower() for w in words):
                 words.append(dict(ins))
+        # Manual removal of a misaligned duplicate (clip["word_drops"] = [{"w":..,"s":..}], survives re-runs).
+        for dr in clip.get("word_drops") or []:
+            words = [w for w in words if not (abs(w["s"] - dr["s"]) < 0.05 and w["w"].lower() == dr["w"].lower())]
         words.sort(key=lambda w: w["s"])
         clip["words"] = words
         quotes = clip.get("quotes")
