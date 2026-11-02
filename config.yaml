@@ -85,7 +85,7 @@ hook:
   size: 72
   y: 330
   y_duo: 312          # stacked duo: top of the box at the safe zone edge, off the speaker's head
-  y_face: 1180        # shots layout close-ups: over the chest, clear of the forehead and the captions
+  y_face: 1250        # shots layout close-ups: over the chest, clear of the forehead and the captions
 
 music:
   threshold: 0.3   # YAMNet music score above which a second counts as "music"
