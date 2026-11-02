@@ -246,6 +246,19 @@ sources:
       Topic must be AI risks/dangers. Use words like could, might, maybe where the speaker hedges; never state
       predictions as facts. Start on the quoted hook line, end on a complete sentence. 10-40 seconds.
 
+  - name: cod-mw4-trailer
+    streamer: Call of Duty
+    channel_url: https://www.callofduty.com
+    layout: fit
+    montage: true          # music trailer, no speech: speech/caption/flash QA checks skipped
+    platforms: [tiktok, instagram]   # Badi posts by hand, NEVER uploaded to YouTube
+    tags: [callofduty, mw4, warzone]
+    credit: ""
+    required_text: ""     # caption itself carries @callofduty and #Ad
+    rank_notes: >-
+      Official MW4 Season 1 trailer footage only (MediaSilo content folder). Pick the most striking 8-20 second
+      moments. No made-up facts, stats or dates. Keep it genuine, fan tone.
+
   # Practice sources: overnight pipeline evaluation only, never uploaded.
   - name: practice-kai
     streamer: Kai Cenat

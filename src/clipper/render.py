@@ -196,12 +196,13 @@ def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam:
     W, H = rc["width"], rc["height"]
     sw, sh = info["width"], info["height"]
     if layout == "fit":
+        zoom = 1.0 if (source or {}).get("montage") else rc["fit_zoom"]  # montage: no side crop, in-game titles stay whole
         # Whole frame in the middle over a blurred, darkened copy: nothing important gets cropped away.
         return (
             f"[{inp}]split[{out}a][{out}b];"
             f"[{out}a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
             f"boxblur=20:2,eq=brightness=-0.12[{out}bg];"
-            f"[{out}b]scale={even(W * rc['fit_zoom'])}:-2,crop={W}:ih[{out}fg];"
+            f"[{out}b]scale={even(W * zoom)}:-2,crop={W}:ih[{out}fg];"
             f"[{out}bg][{out}fg]overlay=(W-w)/2:(H-h)/2,setsar=1[{out}]"
         )
     if layout == "split":
@@ -1202,9 +1203,11 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 graph.append(f"[{i}:v]setpts=PTS-STARTPTS,fps={rc['fps']},trim=end_frame={n_out}[z{i}]")
                 graph.append(layout_filter(cfg, info, layout, cx, cam, f"z{i}", f"l{i}",
                                            track=seg_track, seg_start=s,
-                                           source=source if source.get("campaign_url") else None))
+                                           source=source if (source.get("campaign_url") or source.get("montage")) else None))
             # Short audio fades at every cut so word-boundary splices do not click.
             fi, fo, dur = AUDIO_FADE_IN, AUDIO_FADE_OUT, (nframes[i] - 0.5) / fps
+            if source.get("montage"):
+                fi = fo = 0.4  # music montage: fade the bed instead of cutting it mid-sound
             graph.append(f"[{i}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
                          f"apad=whole_dur={nframes[i] / fps:.6f}[a{i}]")
             concat += f"[l{i}][a{i}]"
@@ -1311,6 +1314,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 continue
         problems = run_all(cfg, cdir, audio_fn, [(e_, off_ + e_ - s_) for s_, e_, off_ in segments],
                            [(s_, off_) for s_, e_, off_ in segments],
+                           montage=bool(source.get("montage")),
                            logo=((logo_box(Path(lg["file"]), int(lg.get("width", 340))), int(lg.get("y", 1360))) if lg.get("file") else None))
         if problems:
             # Known defect types never reach the reviewer: the clip stays out of the queue.

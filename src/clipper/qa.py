@@ -85,6 +85,11 @@ def check_safe_zone(cdir: Path, fonts: Path) -> list[str]:
     return bad
 
 
+def check_safe_zone_text_only(cdir: Path, fonts: Path) -> list[str]:
+    """Safe-zone check for montage sources: in-game characters are not faces, only our own text counts."""
+    return [p for p in check_safe_zone(cdir, fonts) if not p.startswith("safe zone: face")]
+
+
 def check_segment_ends(audio_fn, source_ends: list[tuple[float, float]]) -> list[str]:
     """Each segment end must land in silence in the source audio (last 30 ms before the cut).
 
@@ -643,27 +648,34 @@ def check_logo(cdir: Path, box: Path | None, y: int, samples: int = 12) -> list[
 
 
 def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, float]],
-            source_starts: list[tuple[float, float]] = (), logo: tuple | None = None) -> list[str]:
+            source_starts: list[tuple[float, float]] = (), logo: tuple | None = None,
+            montage: bool = False) -> list[str]:
+    """montage: music/footage sources without speech or captions: skip the speech, caption, face and fast-cut checks."""
     video = cdir / "short.mp4"
     problems = []
     fdir = Path(path_of(cfg, "fonts")).resolve()
     if not fdir.is_dir() or not any(fdir.glob("*.[ot]tf")):
         return [f"QA font dir missing or empty ({fdir}): caption checks cannot be trusted"]
-    problems += check_safe_zone(cdir, path_of(cfg, "fonts"))
-    problems += check_caption_face(cdir, path_of(cfg, "fonts"))
-    problems += check_segment_ends(audio_fn, source_ends)
-    problems += check_segment_starts(audio_fn, list(source_starts))
-    problems += check_true_peak(video)
-    problems += check_flashes(video)
-    problems += check_caption_durations(cdir / "captions.ass")
-    problems += check_dead_air(video)
-    problems += check_caption_overlap(cdir / "captions.ass")
-    problems += check_caption_sync(video, cdir / "captions.ass")
-    problems += check_caption_words(video, cdir / "captions.ass")
-    problems += check_repeated_words(video, cdir / "captions.ass")
-    problems += check_uncaptioned_speech(video, cdir / "captions.ass")
-    problems += check_burned_text(cdir, path_of(cfg, "fonts"))
-    problems += check_top_text(cdir)
+    if montage:
+        # edges are faded in render (0.4 s), so the raw-source edge checks do not apply
+        problems += check_safe_zone_text_only(cdir, path_of(cfg, "fonts"))
+        problems += check_true_peak(video)
+    else:
+        problems += check_safe_zone(cdir, path_of(cfg, "fonts"))
+        problems += check_caption_face(cdir, path_of(cfg, "fonts"))
+        problems += check_segment_ends(audio_fn, source_ends)
+        problems += check_segment_starts(audio_fn, list(source_starts))
+        problems += check_true_peak(video)
+        problems += check_flashes(video)
+        problems += check_caption_durations(cdir / "captions.ass")
+        problems += check_dead_air(video)
+        problems += check_caption_overlap(cdir / "captions.ass")
+        problems += check_caption_sync(video, cdir / "captions.ass")
+        problems += check_caption_words(video, cdir / "captions.ass")
+        problems += check_repeated_words(video, cdir / "captions.ass")
+        problems += check_uncaptioned_speech(video, cdir / "captions.ass")
+        problems += check_burned_text(cdir, path_of(cfg, "fonts"))
+        problems += check_top_text(cdir)
     if logo:
         problems += check_logo(cdir, *logo)
     (cdir / "qa.txt").write_text("\n".join(problems) + "\n" if problems else "ok\n")
