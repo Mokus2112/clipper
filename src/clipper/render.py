@@ -617,11 +617,18 @@ def caption_words(words: list[dict]) -> list[dict]:
     return [w for w in words if not _NON_LATIN.search(w["w"]) and not _HESITATION.match(w["w"])]
 
 
+def _number_tail(prev: str, cur: str) -> bool:
+    """True when cur continues a number split by the tokenizer: '17' ',500' or '17,' '500'."""
+    if re.search(r"\d$", prev) and re.fullmatch(r"[.,]\d+[%\w]*", cur):
+        return True
+    return bool(re.fullmatch(r"\d[\d.,]*[.,]", prev) and re.fullmatch(r"\d{3}\b[%\w]*", cur))
+
+
 def merge_punct(words: list[dict]) -> list[dict]:
     """Glue punctuation-only tokens onto the previous word: '50' '%' -> '50%'."""
     out: list[dict] = []
     for w in words:
-        if out and (re.fullmatch(r"[^\w]+", w["w"]) or w["w"].startswith("-")):
+        if out and (re.fullmatch(r"[^\w]+", w["w"]) or w["w"].startswith("-") or _number_tail(out[-1]["w"], w["w"])):
             out[-1] = {**out[-1], "w": out[-1]["w"] + w["w"], "e": max(out[-1]["e"], w["e"])}
         else:
             out.append(dict(w))
