@@ -470,7 +470,7 @@ def top_text_hits(cdir: Path) -> list[tuple[float, tuple[int, int, int, int]]]:
         if x0 is not None:
             out.append((t, (x0 * 2, y0 * 2, x1 * 2, y1 * 2)))
         if (x0 is None or x0 > 40) and cv2.Canny(corner, 100, 200).mean() / 255 >= 0.02:
-            out.append((t, (0, 0, 80, 130)))
+            out.append((t, (0, 0, 100, 170)))
     cap.release()
     return out
 
@@ -497,7 +497,7 @@ def _is_persistent(sp: list[float], dur: float) -> bool:
 def plan_top_blur(cdir: Path) -> list[list[float]]:
     """[t0, t1, x0, y0, x1, y1] spans (output seconds / pixels) to blur out burned-in source text in the top strip."""
     dur = _duration(cdir / "short.mp4")
-    return [[max(0.0, a), b2, max(0, x0 - 24), max(0, y0 - 16), min(1080, x1 + 24), min(220, y1 + 16)]
+    return [[max(0.0, a), b2, max(0, x0 - 40), max(0, y0 - 24), min(1080, x1 + 40), min(240, y1 + 24)]
             for a, b2, x0, y0, x1, y1 in _raw_top_spans(cdir) if not _is_persistent([a, b2], dur)]
 
 

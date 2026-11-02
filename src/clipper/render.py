@@ -1196,7 +1196,21 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         # Caption-free low-res copy for the burned-in-text QA (same frames, no subtitles, no logo).
         for k, (t0_, t1_, bx0, by0, bx1, by1) in enumerate(TOP_BLUR.get(clip["id"], [])):
             bw_, bh_ = int(bx1 - bx0), int(by1 - by0)
-            graph.append(f"[{cap_in}]split[tb{k}a][tb{k}b];[tb{k}b]crop={bw_}:{bh_}:{int(bx0)}:{int(by0)},gblur=sigma=40:steps=4[tb{k}c];"
+            # Feathered patch: alpha ramps over 24 px on the sides that do not touch the frame edge.
+            terms = ["9999"]
+            if bx0 > 0:
+                terms.append("(X+1)")
+            if bx1 < 1080:
+                terms.append(f"({bw_}-X)")
+            if by0 > 0:
+                terms.append("(Y+1)")
+            terms.append(f"({bh_}-Y)")
+            dist = terms[0]
+            for t_ in terms[1:]:
+                dist = f"min({dist},{t_})"
+            alpha = f"255*min(1,{dist}/24)"
+            graph.append(f"[{cap_in}]split[tb{k}a][tb{k}b];[tb{k}b]crop={bw_}:{bh_}:{int(bx0)}:{int(by0)},gblur=sigma=40:steps=4,"
+                         f"format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='{alpha}'[tb{k}c];"
                          f"[tb{k}a][tb{k}c]overlay={int(bx0)}:{int(by0)}:enable='between(t,{t0_:.2f},{t1_:.2f})'[tb{k}]")
             cap_in = f"tb{k}"
         graph.append(f"[{cap_in}]split[cap_a][cap_b];[cap_b]fps=2,scale=540:960[nc]")
