@@ -477,6 +477,8 @@ def plan_caption_shift(cdir: Path, fonts: Path) -> list[list[float]]:
     faces = face_boxes(cdir / "short.mp4", _duration(cdir / "short.mp4"))
     for a, b in spans:
         inside = [(t, bx) for t, bx in boxes if a <= t <= b and bx[3] > 1100]
+        if not inside:  # conflict seen by OCR but no caption box in the lower band: nothing to shift
+            continue
         top, bot = min(bx[1] for _, bx in inside), max(bx[3] for _, bx in inside)
         fallback = None
         for dy in (-260, -400, -520, 240, 360, 120, 60):
