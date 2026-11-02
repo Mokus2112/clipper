@@ -62,16 +62,33 @@ def hook_box(ass):
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
-def test_closeup_hook_never_on_the_head():
+def hook_end(ass):
+    m = re.search(r"Dialogue: 1,[\d:.]+,([\d:.]+),HookBox", ass)
+    return secs(m.group(1))
+
+
+def test_hook_one_fixed_position_and_short_on_tight_closeup():
     clip = {"hook": "Who pooped in Depp's bed?", "words": []}
-    # small face low in frame: room above the hair
+    y = CFG["hook"]["y"]
+    # room above the hair: full window, fixed y
     geo = {"ft": 700, "fb": 1000, "cap": 1.2, "t0": 0.0}
-    box = hook_box(build_ass(CFG, clip, [(0.0, 10.0, 0.0)], "shots", [(0.0, 5.0, "face", geo)], FONTS))
-    assert box and box[0] >= SAFE_TOP and box[1] <= 700 - 0.35 * 300
-    # big face high in frame: under the chin, clear of the captions
+    ass = build_ass(CFG, clip, [(0.0, 10.0, 0.0)], "shots", [(0.0, 5.0, "face", geo)], FONTS)
+    box = hook_box(ass)
+    assert box and abs((box[0] + box[1]) / 2 - y) < 1 and box[0] >= SAFE_TOP
+    assert abs(hook_end(ass) - CFG["hook"]["seconds"]) < 0.02
+    # head too high: same position, but at most 2.0 s
     geo = {"ft": 330, "fb": 900, "cap": 1.0, "t0": 0.0}
-    box = hook_box(build_ass(CFG, clip, [(0.0, 10.0, 0.0)], "shots", [(0.0, 5.0, "face", geo)], FONTS))
-    assert box and box[0] >= 940 and box[1] <= 1410 - 90 - 30
-    # face fills the frame: no hook at all
-    geo = {"ft": 330, "fb": 1330, "cap": 1.0, "t0": 0.0}
-    assert hook_box(build_ass(CFG, clip, [(0.0, 10.0, 0.0)], "shots", [(0.0, 5.0, "face", geo)], FONTS)) is None
+    ass = build_ass(CFG, clip, [(0.0, 10.0, 0.0)], "shots", [(0.0, 5.0, "face", geo)], FONTS)
+    box = hook_box(ass)
+    assert abs((box[0] + box[1]) / 2 - y) < 1
+    assert hook_end(ass) <= 2.0 + 0.02
+    assert len([l for l in ass.splitlines() if l.startswith("Dialogue") and "HookBox" in l]) == 2  # no per-shot jumping
+
+
+def test_no_fade_on_short_chunk_and_short_words_merge():
+    clip = {"words": [{"w": "a", "s": 0.0, "e": 0.05}, {"w": "big", "s": 0.05, "e": 0.4},
+                      {"w": "yes", "s": 0.4, "e": 0.9}]}
+    lines = caps(build_ass(CFG, clip, [(0.0, 10.0, 0.0)], "center", None, FONTS))
+    for l in lines:
+        d = secs(l.split(",")[2]) - secs(l.split(",")[1])
+        assert d >= 4 / 30 - 0.011  # no 1-3 frame flashes

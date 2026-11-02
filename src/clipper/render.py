@@ -466,6 +466,8 @@ def face_frame(shot: dict, info: dict, W: int = 1080, H: int = 1920) -> dict:
     return {"ch": even(ch), "y0": even(y0), "ft_out": t, "fb_out": b, "tight": True}
 
 
+HOOK_SHORT_S = 2.0  # close-up without head room: hook visible at most this long
+MIN_WORD_SHOW = 4 / 30  # a highlight shorter than 4 frames merges into its neighbour
 HOOK_BH_EST = 130  # hook box height estimate at the default size, for layout decisions before the ASS pass
 
 
@@ -1042,6 +1044,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
 
     max_w = cc.get("max_width", SAFE_RIGHT_X - SAFE_LEFT - 70)
     lead = cc.get("onset_lead", 0.03)
+    sync = cc.get("sync_shift", 0.07)  # whisper on the finished audio: captions came median +69 ms late (reviewer #274)
     fade = cc.get("fade_ms", 70)
     blur = cc.get("blur", 1)
     hl_out = cc.get("highlight_outline")
@@ -1056,7 +1059,8 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
     for seg_s, seg_e, off in segments:
         # A word is captioned only if it starts inside the segment and its middle is inside too:
         # no word from before the cut (cold open began after "To this day,"), no half-heard word at the end.
-        words = [w for w in caption_words(merge_punct(clip.get("words", [])))
+        words = [{**w, "s": w["s"] - sync, "e": w["e"] - sync}
+                 for w in caption_words(merge_punct(clip.get("words", [])))
                  if w["s"] >= seg_s - 0.02 and (w["s"] + w["e"]) / 2 <= seg_e]
         chunks = chunk_words(words, cc["max_words"], cc["max_chunk_sec"], fits if cap_font else None)
         for ci, chunk in enumerate(chunks):
@@ -1069,21 +1073,33 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
             chunk_t0 = max(chunk[0]["s"] - lead, seg_s)
             chunk_t1 = min(chunk[-1]["e"] + 0.12, next_start if next_start is not None else 1e9, seg_e)
             first = True
+            evs = []  # [t0, t1, highlighted word index]
             for i, w in enumerate(chunk):
                 t0 = w["s"] if i else chunk_t0
                 t1 = chunk[i + 1]["s"] if i + 1 < len(chunk) else chunk[-1]["e"] + 0.12  # a word's voiced tail outlasts its aligned end
                 if next_start is not None:
                     t1 = min(t1, next_start)  # two caption lines must never be on screen together
                 t0, t1 = max(t0, seg_s), min(t1, seg_e)
-                if t1 <= t0:
-                    continue
+                if t1 > t0:
+                    evs.append([t0, t1, i])
+            # A highlight shown 2-4 frames flashes: it joins its neighbour (the previous word keeps the light a bit longer).
+            while len(evs) > 1:
+                k = next((j for j, e in enumerate(evs) if e[1] - e[0] < MIN_WORD_SHOW), None)
+                if k is None:
+                    break
+                if k > 0:
+                    evs[k - 1][1] = evs[k][1]
+                else:
+                    evs[1][0] = evs[0][0]
+                del evs[k]
+            for t0, t1, i in evs:
                 if hl_out:
                     on, off_ = f"{{\\3c{hl_out}\\c{cc['highlight']}}}", f"{{\\3c&H00000000\\c{cc['color']}}}"
                 else:
                     on, off_ = f"{{\\c{cc['highlight']}}}", f"{{\\c{cc['color']}}}"
                 parts = [f"{on}{t}{off_}" if j == i else t for j, t in enumerate(texts)]
-                # No fade on a word shown < 0.2 s: it would spend most of its frames half-transparent.
-                fade_tag = f"\\fad({fade},0)" if fade and t1 - t0 >= 0.2 else ""
+                # No fade on a line shorter than 0.2 s or a first word shown < 0.2 s: it would spend most of its frames half-transparent.
+                fade_tag = f"\\fad({fade},0)" if fade and chunk_t1 - chunk_t0 >= 0.2 and t1 - t0 >= 0.2 else ""
                 for a, b, yy in placed(t0 - seg_s + off, t1 - seg_s + off):
                     if b - a < 0.05:
                         continue  # a sliver flashes one frame at a cut, lit during silence
@@ -1123,54 +1139,27 @@ def hook_events(cfg: dict, clip: dict, segments, shot_spans, fonts_dir, cap_font
     x0, x1 = SAFE_LEFT, SAFE_LEFT + HOOK_BAR + pad + min(tw, avail) + pad
     cap_top = cc.get("y_shots_face", 1410) - _cap_h(cap_font, cc["size"]) / 2 - cc["outline"]
 
-    def slot(kind: str, geo: dict | None, lo: float, hi: float) -> float | None:
-        """Box centre y for this span, None = no hook here."""
-        if kind == "duo":
-            # Never at the top: the box landed on the upper speaker's head (reviewer FAIL 131638-c1).
-            # Instead on the upper speaker's chest, HOOK_DUO_GAP above the duo caption line, if the
-            # chin is clear of the box.
-            yc = cc.get("y_shots_duo", 1000) - HOOK_DUO_GAP
-            if geo and "fb_top" in geo and yc - bh / 2 >= geo["fb_top"] + 40 and yc + bh / 2 <= H_HALF:
-                return yc
-            return None
-        if not kind.startswith("face"):
-            return hc["y"]
-        if not geo:
-            return hc.get("y_face", hc["y"])
-        ft, fb = geo["ft"], geo["fb"]
-        # Above the hair: the push-in is anchored at SAFE_TOP, so the head only moves down.
-        top = SAFE_TOP
-        if top + bh <= ft - (HOOK_HAIR * (fb - ft) + 10):
-            return top + bh / 2
-        # Under the chin, at the deepest zoom this span reaches.
-        z = min(geo["cap"], 1 + rc.get("push_in_rate", 0.0) * max(0.0, hi - geo["t0"]))
-        fb_z = SAFE_TOP + (fb - SAFE_TOP) * z
-        top = fb_z + 40
-        if top + bh + HOOK_CAP_GAP <= cap_top:
-            return top + bh / 2
-        return None
-
+    yc = hc["y"]  # ONE fixed position for the whole hook window, in every layout (reviewer #274: no jumping)
+    y0, y1 = yc - bh / 2, yc + bh / 2
     cold = clip.get("cold_len", segments[0][1] - segments[0][0] if len(segments) > 1 else 0.0)
     t_end = cold + hc["seconds"]
-    out, shown = [], 0.0
+    # Close-up with no room above the hair for the box: the hook is shown only HOOK_SHORT_S, not for the full window.
+    for a, b, kind, *rest in (shot_spans or []):
+        geo = rest[0] if rest else None
+        if kind.startswith("face") and geo and max(a, 0.0) < t_end and b > cold and y1 > geo["ft"] - (HOOK_HAIR * (geo["fb"] - geo["ft"]) + 10):
+            t_end = min(t_end, cold + HOOK_SHORT_S)
+            log(f"  hook: head too high for the box at y{yc:.0f}, hook limited to {HOOK_SHORT_S:.1f} s")
+            break
     off = _cap_off(font, size)
-    for a, b, kind, *rest in (shot_spans or [(0.0, 1e9, "")]):
-        lo, hi = max(0.0, a), min(t_end, b)
-        if hi - lo < 0.05:
-            continue
-        yc = slot(kind, rest[0] if rest else None, lo, hi)
-        if yc is None:
-            continue
-        y0, y1 = yc - bh / 2, yc + bh / 2
-        t = f"{ass_time(lo)},{ass_time(hi)}"
-        rect = lambda u0, u1: f"m {u0:.0f} {y0:.0f} l {u1:.0f} {y0:.0f} l {u1:.0f} {y1:.0f} l {u0:.0f} {y1:.0f}"
-        out += [
-            f"Dialogue: 1,{t},HookBox,,0,0,0,,{{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\c{hc.get('fill', '&H00111111')}"
-            f"\\1a{hc.get('fill_alpha', '&H26&')}}}{rect(x0, x1)}",
-            f"Dialogue: 2,{t},HookBox,,0,0,0,,{{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\c{hc['box']}}}{rect(x0, x0 + HOOK_BAR)}",
-            f"Dialogue: 3,{t},HookText,,0,0,0,,{{\\an4\\pos({x0 + HOOK_BAR + pad},{yc - off:.0f})\\fs{size}}}{text}",
-        ]
-        shown += hi - lo
+    t = f"{ass_time(0.0)},{ass_time(t_end)}"
+    rect = lambda u0, u1: f"m {u0:.0f} {y0:.0f} l {u1:.0f} {y0:.0f} l {u1:.0f} {y1:.0f} l {u0:.0f} {y1:.0f}"
+    out = [
+        f"Dialogue: 1,{t},HookBox,,0,0,0,,{{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\c{hc.get('fill', '&H00111111')}"
+        f"\\1a{hc.get('fill_alpha', '&H26&')}}}{rect(x0, x1)}",
+        f"Dialogue: 2,{t},HookBox,,0,0,0,,{{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\c{hc['box']}}}{rect(x0, x0 + HOOK_BAR)}",
+        f"Dialogue: 3,{t},HookText,,0,0,0,,{{\\an4\\pos({x0 + HOOK_BAR + pad},{yc - off:.0f})\\fs{size}}}{text}",
+    ]
+    shown = t_end
     if shown < 1.0:
         log(f"  WARN hook shown only {shown:.2f} s (no head-free slot on the close-ups)")
     return out

@@ -109,7 +109,7 @@ hook:
   size: 112           # shrinks to fit the safe width ...
   min_size: 80        # ... never below this (rank.py keeps hooks <= 28 chars / 5 words)
   pad: 18
-  y: 330
+  y: 334
   y_duo: 312          # stacked duo: top of the box at the safe zone edge, off the speaker's head
   y_face: 1250        # close-up fallback without face geometry; normally above the hair or under the chin
 
