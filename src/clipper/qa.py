@@ -28,7 +28,7 @@ def text_boxes(cdir: Path, dur: float, fonts: Path, split: bool = False) -> list
     """Bounding box of all on-screen text (captions + hook) every 0.1 s, rendered alone on black."""
     raw = subprocess.run(
         [tool("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", f"color=black:s=1080x1920:r=10:d={dur:.2f}",
-         "-vf", f"subtitles=captions.ass:fontsdir={fonts},format=gray", "-f", "rawvideo", "-"],
+         "-vf", f"subtitles=captions.ass:fontsdir={Path(fonts).resolve()},format=gray", "-f", "rawvideo", "-"],
         cwd=cdir, capture_output=True, check=True,
     ).stdout
     frames = np.frombuffer(raw, np.uint8).reshape(-1, 1920, 1080)
@@ -400,11 +400,40 @@ def burned_text_conflicts(cdir: Path, fonts: Path, min_chars: int = 4, dy_at=Non
                 if len(c) == 12 and float(c[10]) >= 60 and re.search(r"[A-Za-z0-9]{2,}", c[11]):
                     wx0, wy0 = rx0 + int(c[6]) / 3, ry0 + int(c[7]) / 3
                     wx1, wy1 = wx0 + int(c[8]) / 3, wy0 + int(c[9]) / 3
-                    if wx0 < x1 and wx1 > x0 and wy0 < y1 and wy1 > y0:  # overlaps our text box
+                    if wx0 < x1 + 10 and wx1 > x0 - 10 and wy0 < y1 + 15 and wy1 > y0 - 15:  # on or hugging our text box
                         words.append(c[11])
             txt = " ".join(words)
             if len(re.sub(r"\W", "", txt)) >= min_chars:
                 out.append((t, (x0 * 2, y0 * 2, x1 * 2, y1 * 2), txt))
+    cap.release()
+    return out
+
+
+def busy_caption_times(cdir: Path, fonts: Path, dy: int = 0) -> set[float]:
+    """Sample times (0.5 s grid) where the caption-free picture is busy around our caption box.
+    OCR on a sparse 2 fps grid misses lower-thirds that animate; this marks the whole span they occupy."""
+    import cv2
+    nocap = cdir / "nocap.mp4"
+    if not nocap.exists():
+        return set()
+    by_t: dict[float, list] = {}
+    for t, b in text_boxes(cdir, _duration(cdir / "short.mp4"), fonts, split=True):
+        by_t.setdefault(round(t * 2) / 2, []).append(b)
+    cap = cv2.VideoCapture(str(nocap))
+    out, i = set(), 0
+    while True:
+        ok, fr = cap.read()
+        if not ok:
+            break
+        t = i / 2
+        i += 1
+        bs = sorted(by_t.get(t, []), key=lambda b: b[1])
+        if not bs:
+            continue
+        x0, y0, x1, y1 = [v // 2 for v in bs[-1]]
+        roi = fr[max(0, y0 + dy // 2 - 40):y1 + dy // 2 + 40, max(0, x0 - 20):x1 + 20]
+        if roi.size and cv2.Canny(cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY), 100, 200).mean() / 255 >= 0.02:
+            out.add(t)
     cap.release()
     return out
 
@@ -420,6 +449,12 @@ def plan_caption_shift(cdir: Path, fonts: Path) -> list[list[float]]:
             spans[-1][1] = t + 0.5
         else:
             spans.append([t - 0.5, t + 0.5])
+    busy = busy_caption_times(cdir, fonts)
+    for s in spans:  # a lower-third lasts longer than the OCR sample that caught it: cover the whole run
+        while s[0] - 0.5 >= 0 and (round((s[0] + 0.5) * 2) / 2 - 0.5) in busy:
+            s[0] -= 0.5
+        while (round((s[1] - 0.5) * 2) / 2 + 0.5) in busy:
+            s[1] += 0.5
     boxes = text_boxes(cdir, _duration(cdir / "short.mp4"), fonts, split=True)
     out = []
     faces = face_boxes(cdir / "short.mp4", _duration(cdir / "short.mp4"))
