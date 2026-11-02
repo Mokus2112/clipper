@@ -20,6 +20,7 @@ import numpy as np
 
 UNCERTAIN_MS = 150
 FAIL_MS = 150
+CAP_NEAR_MS = 200  # an energy onset this close to the caption backs it over whisper
 HOP = 0.01
 QUIET_STEPS = 8  # 80 ms of quiet before an energy onset counts
 ENV_WIN = 0.05
@@ -31,10 +32,16 @@ class Row:
     cap: float
     whisper: float
     energy: float | None
+    energy_at_cap: float | None = None  # onset after a pause found near the CAPTION time
 
     @property
     def uncertain(self) -> bool:
-        return self.energy is not None and abs(self.whisper - self.energy) * 1000 > UNCERTAIN_MS
+        if self.energy is not None and abs(self.whisper - self.energy) * 1000 > UNCERTAIN_MS:
+            return True
+        # whisper says off, but a real onset sits right at the caption: whisper is the likelier error
+        # (FEELS: whisper 1.18 inside an 'um', true onset 1.90, caption 1.76)
+        return (abs(self.d_whisper) > FAIL_MS and self.energy_at_cap is not None
+                and abs(self.cap - self.energy_at_cap) * 1000 <= CAP_NEAR_MS)
 
     @property
     def d_whisper(self) -> float:
@@ -130,7 +137,8 @@ def measure(video: Path, ass: Path) -> list[Row]:
     cap, heard = caption_words(ass), whisper_words(audio)
     rows = []
     for i, j in pair(cap, heard):
-        rows.append(Row(cap[i][0], cap[i][1], heard[j][1], energy_onset(env, heard[j][1])))
+        rows.append(Row(cap[i][0], cap[i][1], heard[j][1], energy_onset(env, heard[j][1]),
+                        energy_onset(env, cap[i][1], 0.2, 0.2)))
     return rows
 
 

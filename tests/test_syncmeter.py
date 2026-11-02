@@ -38,3 +38,10 @@ def test_pairing_skips_words_missing_from_audio():
     cap = [("IS", 1.0), ("THAT", 1.2), ("THIS", 1.5)]
     heard = [("this", 0.9)]
     assert sm.pair(cap, heard) == [(2, 0)]
+
+
+def test_whisper_error_inside_um_is_uncertain():
+    # post-G alliance c1: whisper put FEELS at 1.18 (inside the 'um'), the real onset is 1.90, caption 1.76
+    env = sm.envelope_db(_burst(4.0, 1.90, 2.6))
+    r = sm.Row("FEELS", 1.76, 1.18, None, sm.energy_onset(env, 1.76, 0.2, 0.2))
+    assert r.energy_at_cap is not None and r.uncertain and r.verdict == "uncertain"
