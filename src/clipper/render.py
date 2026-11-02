@@ -1379,10 +1379,17 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         (cdir / "captions.ass").write_text(build_ass(cap_cfg, clip, segments, layout, shot_spans, fonts))
 
         inputs, graph, concat = [], [], ""
+        # Segment audio comes from one sample-exact WAV: input seek on the video file loses audio on some sources.
+        from .segaudio import extract_range
+        seg_wav = cdir / "segments_audio.wav"
+        wav_t0 = extract_range(video, min(sg[0] for sg in segments), max(sg[1] for sg in segments), seg_wav)
+        # -t half a frame short of n frames: exactly n video frames; audio is padded to n/fps.
+        for i, (s, e, _) in enumerate(segments):
+            inputs += ["-ss", f"{s:.6f}", "-t", f"{(nframes[i] - 0.5) / info['fps']:.6f}", "-i", video.resolve()]
+        for i, (s, e, _) in enumerate(segments):  # inputs len(segments)+i: the segment audio
+            inputs += ["-ss", f"{s - wav_t0:.6f}", "-t", f"{(nframes[i] - 0.5) / info['fps']:.6f}", "-i", seg_wav.resolve()]
         for i, (s, e, _) in enumerate(segments):
             fps = info["fps"]
-            # -t half a frame short of n frames: exactly n video frames; audio is padded to n/fps.
-            inputs += ["-ss", f"{s:.6f}", "-t", f"{(nframes[i] - 0.5) / fps:.6f}", "-i", video.resolve()]
             if layout == "shots":
                 # One static layout per camera shot; trim on a single input keeps every frame exactly once.
                 shots = seg_shots[i]
@@ -1421,7 +1428,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             a_dur = n_out / float(rc["fps"]) if layout != "shots" and rc["fps"] else nframes[i] / fps
             if source.get("montage"):
                 fi = fo = 0.4  # music montage: fade the bed instead of cutting it mid-sound
-            graph.append(f"[{i}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
+            graph.append(f"[{len(segments) + i}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
                          f"apad=whole_dur={a_dur:.6f},asetpts=PTS-STARTPTS,atrim=end={a_dur:.6f}[a{i}]")
             concat += f"[l{i}][a{i}]"
         # loudnorm alone let true peaks reach -0.7 dBFS; limiter at -3 dBFS leaves room for AAC overshoot (~1.5 dB).
