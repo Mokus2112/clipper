@@ -475,8 +475,7 @@ def top_text_hits(cdir: Path) -> list[tuple[float, tuple[int, int, int, int]]]:
     return out
 
 
-def plan_top_blur(cdir: Path) -> list[list[float]]:
-    """[t0, t1, x0, y0, x1, y1] spans (output seconds / pixels) to blur out burned-in source text in the top strip."""
+def _raw_top_spans(cdir: Path) -> list[list[float]]:
     spans: list[list[float]] = []
     for t, b in top_text_hits(cdir):
         sp = next((s_ for s_ in spans if t - 1.0 <= s_[1] and abs(b[0] - s_[2]) < 60 and abs(b[2] - s_[4]) < 120), None)
@@ -486,12 +485,27 @@ def plan_top_blur(cdir: Path) -> list[list[float]]:
             sp[4], sp[5] = max(sp[4], b[2]), max(sp[5], b[3])
         else:
             spans.append([t - 0.5, t + 0.5, *b])
+    return spans
+
+
+def _is_persistent(sp: list[float], dur: float) -> bool:
+    """Text up (nearly) the whole clip is the source credit / channel watermark: keep it (hiding the origin
+    would look like a disguised reupload). Only temporary titles and captions get blurred."""
+    return dur > 0 and (sp[1] - sp[0]) >= 0.85 * dur
+
+
+def plan_top_blur(cdir: Path) -> list[list[float]]:
+    """[t0, t1, x0, y0, x1, y1] spans (output seconds / pixels) to blur out burned-in source text in the top strip."""
+    dur = _duration(cdir / "short.mp4")
     return [[max(0.0, a), b2, max(0, x0 - 24), max(0, y0 - 16), min(1080, x1 + 24), min(220, y1 + 16)]
-            for a, b2, x0, y0, x1, y1 in spans]
+            for a, b2, x0, y0, x1, y1 in _raw_top_spans(cdir) if not _is_persistent([a, b2], dur)]
 
 
 def check_top_text(cdir: Path) -> list[str]:
-    return [f"burned-in source text in the top strip at {t:.1f}s box {b}" for t, b in top_text_hits(cdir)]
+    dur = _duration(cdir / "short.mp4")
+    keep = [s_ for s_ in _raw_top_spans(cdir) if _is_persistent(s_, dur)]
+    return [f"burned-in source text in the top strip at {t:.1f}s box {b}" for t, b in top_text_hits(cdir)
+            if not any(s_[0] <= t <= s_[1] and b[0] < s_[4] and b[2] > s_[2] for s_ in keep)]
 
 
 def check_burned_text(cdir: Path, fonts: Path) -> list[str]:
