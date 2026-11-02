@@ -29,6 +29,16 @@ def _campaign_title(title: str, source: dict) -> str:
     return title[:100]  # YouTube title limit
 
 
+def _summary(clip: dict) -> str:
+    """First description line: the caption as one sentence (no hashtags, max 150 chars)."""
+    text = " ".join(w for w in (clip.get("caption") or "").split() if not w.startswith("#")).strip()
+    if not text:
+        return ""
+    if text[-1] not in ".?!":
+        text += "."
+    return text[:150]
+
+
 def add(cfg: dict, clip: dict, source: dict, file: Path) -> None:
     existing = next((i for i in load(cfg) if i["id"] == clip["id"]), None)
     # A re-render must never wipe an approved or uploaded entry (its video_id/privacy would be lost
@@ -49,7 +59,9 @@ def add(cfg: dict, clip: dict, source: dict, file: Path) -> None:
         "id": clip["id"],
         "file": str(file),
         "title": title,
-        "description": "\n\n".join(x for x in [source.get("credit", ""), required, hashtags, footer] if x),
+        # Mandatory campaign elements (credit, #ad, required tags) stay on top, above the fold;
+        # the one-sentence summary comes right after them.
+        "description": "\n\n".join(x for x in [source.get("credit", ""), required, _summary(clip), hashtags, footer] if x),
         "tags": list(dict.fromkeys(tags + clip_tags)),
         "tiktok": social,
         "instagram": "\n\n".join(x for x in [social, source.get("credit", "")] if x),

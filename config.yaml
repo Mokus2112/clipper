@@ -123,7 +123,8 @@ upload:
   # The videos.insert docs (checked 2026-10-21) say unverified projects are no longer locked to private.
   # Verify once with a test upload before switching to public.
   privacy: private       # Badi 2026-11-01: always upload private first, he publishes manually (clipper publish <id>)
-  category_id: "20"      # 20 = Gaming, 24 = Entertainment
+  category_id: "20"      # default; per source category_id overrides. 20 = Gaming, 24 = Entertainment, 22 = People & Blogs, 28 = Science & Tech. Reach keeps 20 until the campaign page is checked
+  language: en           # snippet defaultLanguage + defaultAudioLanguage
   daily_limit: 3
   description_footer: ""
 
@@ -221,6 +222,7 @@ sources:
 
   # Clip Farm, $1.25 CPM, YouTube + Instagram, ~$9K budget left of $20K.
   - name: clipfarm-solved
+    category_id: "22"     # People & Blogs (podcast, not gaming)
     streamer: Solved w/ Mark Manson
     channel_url: https://www.youtube.com/@IAmMarkManson
     campaign_url: https://contentrewards.com/campaigns/6bdc8e4b-3ebf-44f1-aedb-067589ca9c89
@@ -234,6 +236,7 @@ sources:
   # Logo (approved, data/alliance/logo1.png) must be visible for the whole video; no logo = rejected.
   # Sources: Content Bank in data/campaigns/alliance-notion.md (Google Drive + YouTube).
   - name: alliance-secure-ai
+    category_id: "28"     # Science & Tech, NOT 25 News & Politics (would read as political endorsement)
     streamer: Alliance for Secure AI
     channel_url: https://www.alliance.ai
     layout: center

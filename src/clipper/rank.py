@@ -43,7 +43,9 @@ Hard rules:
   ("Who pooped in Johnny Depp's bed?"), so a stranger knows who it is about.
 - Never state allegations about real people as fact in hook or title (crimes, abuse, disputed events):
   attribute them to the speaker ("Mark Manson on ...") or phrase as the speaker's story.
-- title: under 70 characters, curiosity-driven, includes the streamer name.
+- title: under {title_max} characters (the campaign prefix is added later and already counted), curiosity-driven, the streamer/speaker name (or the main keyword) within the
+  first two words. Title and hook must be about the same moment and promise the same payoff, so the title,
+  the on-screen hook and the first spoken line all point at one topic. Never promise more than the clip shows.
 - story: one sentence, "setup -> payoff".
 - caption: one short line for TikTok/Instagram, under 100 characters, curiosity-driven, may differ from the title.
   The same rule as for hook/title: no allegations about real people stated as fact.
@@ -124,6 +126,12 @@ def format_transcript(segments: list[dict], spikes: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def title_budget(source: dict, limit: int = 60) -> int:
+    """Characters left for the model's title once the mandatory prefix ("Ad: Scape - ") is prepended."""
+    prefix = source.get("title_prefix", "")
+    return limit - (len(prefix) + 1 if prefix else 0)
+
+
 def _hook_with_mention(hook: str, name: str) -> str:
     """Campaigns that require the creator's name in the on-screen text get it in the hook."""
     if name and name.lower() not in hook.lower():
@@ -196,6 +204,7 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
             streamer=source["streamer"], n=rc["clips_per_vod"],
             notes=(f"Campaign rules (hard): {source['rank_notes']}\n" if source.get("rank_notes") else ""), min_sec=cc["min_sec"],
             max_sec=cc["max_sec"] - cfg["render"]["cold_open_max"], transcript="\n".join(part),
+            title_max=title_budget(source),
         ), jd)
         raw.append(out)
         picks += extract_json(out)

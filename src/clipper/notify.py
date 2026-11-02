@@ -77,6 +77,8 @@ def send_upload_result(cfg: dict, clip_id: str, video_id: str, privacy: str) -> 
     text = f"Feltoltve: https://youtube.com/shorts/{video_id}\nYouTube privacy: {privacy}"
     if privacy != "public":
         text += f"\nPublikusra a 🌍 publikus {clip_id} gombbal."
+        # Suggestion only (US morning, 10-12 EST); not a verified algorithm rule. YouTube only.
+        text += "\nJavasolt publikalas: 16-18 ora magyar ido (US delelott)."
     elif _is_reach(cfg, clip_id):
         text += "\n\nReach kampany: 30 percen belul kuldsd be a Content Rewardsba!"
     _send_text(cfg, text)

@@ -43,6 +43,27 @@ def credentials(cfg: dict, need: str = SCOPE_UPLOAD, interactive: bool = True):
     return creds
 
 
+def metadata(cfg: dict, item: dict) -> dict:
+    """videos.insert body. Category is per source (IRL/podcast/news clips are not Gaming)."""
+    uc = cfg["upload"]
+    source = next((s for s in cfg.get("sources", []) if s["name"] == item.get("source")), {})
+    lang = uc.get("language", "en")
+    return {
+        "snippet": {
+            "title": item["title"],
+            "description": item["description"],
+            "tags": item["tags"],
+            "categoryId": str(source.get("category_id") or uc["category_id"]),
+            "defaultLanguage": lang,
+            "defaultAudioLanguage": lang,
+        },
+        # Real footage only (Reach campaigns ban AI content). A source with AI voice/visuals must set
+        # synthetic_media: true, so this is not hardcoded.
+        "status": {"privacyStatus": uc["privacy"], "selfDeclaredMadeForKids": False,
+                   "containsSyntheticMedia": bool(source.get("synthetic_media", False))},
+    }
+
+
 def upload(cfg: dict, limit: int | None = None, clip_ids: list[str] | None = None) -> list[str]:
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
@@ -64,15 +85,7 @@ def upload(cfg: dict, limit: int | None = None, clip_ids: list[str] | None = Non
     yt = build("youtube", "v3", credentials=credentials(cfg))
     done = []
     for item in approved[:budget]:
-        body = {
-            "snippet": {
-                "title": item["title"],
-                "description": item["description"],
-                "tags": item["tags"],
-                "categoryId": uc["category_id"],
-            },
-            "status": {"privacyStatus": uc["privacy"], "selfDeclaredMadeForKids": False},
-        }
+        body = metadata(cfg, item)
         media = MediaFileUpload(item["file"], mimetype="video/mp4", chunksize=-1, resumable=True)
         req = yt.videos().insert(part="snippet,status", body=body, media_body=media)
         resp = None
