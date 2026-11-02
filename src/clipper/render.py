@@ -467,7 +467,43 @@ def face_frame(shot: dict, info: dict, W: int = 1080, H: int = 1920) -> dict:
 
 
 HOOK_SHORT_S = 2.0  # close-up without head room: hook visible at most this long
-MIN_WORD_SHOW = 4 / 30  # a highlight shorter than 4 frames merges into its neighbour
+MIN_WORD_SHOW = 4 / 30  # a highlight shorter than 4 frames borrows time from a neighbour (or merges into it)
+
+
+def balance_highlights(evs: list[list[float]], min_show: float) -> list[list[float]]:
+    """[t0, t1, word index] highlight events of one caption line: every word keeps its highlight.
+
+    A highlight under min_show flashes. It first takes the missing time from a neighbour that stays
+    >= min_show (so edge words of a 3-word line still light up); only when no neighbour can spare it
+    does it merge into the neighbour (the old behaviour)."""
+    evs = [list(e) for e in evs]
+    guard = 0
+    while len(evs) > 1 and guard < 20:
+        guard += 1
+        k = next((j for j, e in enumerate(evs) if e[1] - e[0] < min_show - 1e-9), None)
+        if k is None:
+            break
+        need = min_show - (evs[k][1] - evs[k][0])
+        done = False
+        for n in sorted((j for j in (k - 1, k + 1) if 0 <= j < len(evs)), key=lambda j: -(evs[j][1] - evs[j][0])):
+            contiguous = abs(evs[k][0] - evs[n][1]) < 1e-6 if n < k else abs(evs[k][1] - evs[n][0]) < 1e-6
+            if contiguous and evs[n][1] - evs[n][0] - need >= min_show - 1e-9:
+                if n < k:
+                    evs[n][1] -= need
+                    evs[k][0] -= need
+                else:
+                    evs[n][0] += need
+                    evs[k][1] += need
+                done = True
+                break
+        if done:
+            continue
+        if k > 0:
+            evs[k - 1][1] = evs[k][1]
+        else:
+            evs[1][0] = evs[0][0]
+        del evs[k]
+    return evs
 HOOK_BH_EST = 130  # hook box height estimate at the default size, for layout decisions before the ASS pass
 
 
@@ -1089,16 +1125,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
                 t0, t1 = max(t0, seg_s), min(t1, seg_e)
                 if t1 > t0:
                     evs.append([t0, t1, i])
-            # A highlight shown 2-4 frames flashes: it joins its neighbour (the previous word keeps the light a bit longer).
-            while len(evs) > 1:
-                k = next((j for j, e in enumerate(evs) if e[1] - e[0] < MIN_WORD_SHOW), None)
-                if k is None:
-                    break
-                if k > 0:
-                    evs[k - 1][1] = evs[k][1]
-                else:
-                    evs[1][0] = evs[0][0]
-                del evs[k]
+            evs = balance_highlights(evs, MIN_WORD_SHOW)
             for t0, t1, i in evs:
                 if hl_out:
                     on, off_ = f"{{\\3c{hl_out}\\c{cc['highlight']}}}", f"{{\\3c&H00000000\\c{cc['color']}}}"
