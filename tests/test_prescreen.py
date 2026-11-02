@@ -13,6 +13,7 @@ def test_drops():
     assert prescreen.decide({**OK, "identity_ratio": 0.3}, thr, False) == []
     assert prescreen.decide({**OK, "multi_face_ratio": 0.8}, thr, False)
     assert prescreen.decide({**OK, "multi_face_ratio": 0.8}, thr, True) == []
+    assert prescreen.decide({**OK, "multi_face_ratio": 0.8}, thr, False, tracks_faces=False) == []
     assert prescreen.decide({**OK, "cuts_per_40s": 14}, thr, False)
     assert prescreen.decide({**OK, "top_text_ratio": 0.5}, thr, False)
     assert prescreen.decide({**OK, "silence_ratio": 0.5}, thr, False)

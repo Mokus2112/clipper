@@ -25,12 +25,12 @@ DEFAULTS = {
 }
 
 
-def decide(m: dict, thr: dict, has_identity: bool) -> list[str]:
+def decide(m: dict, thr: dict, has_identity: bool, tracks_faces: bool = True) -> list[str]:
     """Reasons to drop a candidate from its measurements (empty list = keep)."""
     why = []
     if has_identity and m["identity_ratio"] < thr["min_identity_ratio"]:
         why.append(f"identity ratio {m['identity_ratio']:.2f} < {thr['min_identity_ratio']}")
-    if not has_identity and m["multi_face_ratio"] > thr["max_multi_face_ratio"]:
+    if tracks_faces and not has_identity and m["multi_face_ratio"] > thr["max_multi_face_ratio"]:
         why.append(f"2+ faces in {m['multi_face_ratio']:.0%} of samples")
     if m["cuts_per_40s"] > thr["max_cuts_per_40s"]:
         why.append(f"{m['cuts_per_40s']:.1f} cuts per 40 s")
@@ -120,7 +120,7 @@ def prescreen(cfg: dict, job_id: str) -> list[dict]:
     for c in clips:
         try:
             m = measure(video, c["start"], c["end"], source.get("identity"), thr["fps"], thr["silence_db"])
-            why = decide(m, thr, bool(source.get("identity")))
+            why = decide(m, thr, bool(source.get("identity")), source.get("layout") != "center")
         except Exception as exc:  # a failed measurement must never block the pipeline
             log(f"prescreen: {c['id']} not measured ({exc}), keeping")
             m, why = {"error": str(exc)}, []
