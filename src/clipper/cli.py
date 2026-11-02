@@ -28,6 +28,7 @@ def main() -> None:
     for name in ("approve", "reject"):
         sub.add_parser(name).add_argument("clip_ids", nargs="+")
     s = sub.add_parser("upload", help="upload approved clips (respects daily_limit)")
+    s.add_argument("clip_ids", nargs="*", help="only these approved clips (default: all approved)")
     s.add_argument("--limit", type=int)
     sub.add_parser("auth", help="run the YouTube OAuth flow and store the token")
     for name, h in (("publish", "make uploaded clips public"), ("unpublish", "make uploaded clips private")):
@@ -101,7 +102,7 @@ def main() -> None:
                          "--data-urlencode", f"reply_markup={current_keyboard(cfg)}"], "sendMessage")
     elif a.cmd == "upload":
         from .upload import upload
-        upload(cfg, a.limit)
+        upload(cfg, a.limit, a.clip_ids or None)
     elif a.cmd == "notify":
         from .notify import notify
         print(f"sent {notify(cfg, a.clip_ids or None)} clips")

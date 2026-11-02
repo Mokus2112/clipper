@@ -43,7 +43,7 @@ def credentials(cfg: dict, need: str = SCOPE_UPLOAD, interactive: bool = True):
     return creds
 
 
-def upload(cfg: dict, limit: int | None = None) -> list[str]:
+def upload(cfg: dict, limit: int | None = None, clip_ids: list[str] | None = None) -> list[str]:
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
 
@@ -52,6 +52,11 @@ def upload(cfg: dict, limit: int | None = None) -> list[str]:
     if limit is not None:
         budget = min(budget, limit)
     approved = [i for i in review_queue.load(cfg) if i["status"] == "approved"]
+    if clip_ids:
+        not_ready = set(clip_ids) - {i["id"] for i in approved}
+        if not_ready:
+            raise SystemExit(f"not approved (or unknown): {', '.join(sorted(not_ready))}")
+        approved = [i for i in approved if i["id"] in clip_ids]
     if budget <= 0 or not approved:
         log(f"nothing to upload (approved: {len(approved)}, remaining daily budget: {max(budget, 0)})")
         return []
