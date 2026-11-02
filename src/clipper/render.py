@@ -843,6 +843,9 @@ FACE_X = 475                              # close-up face centre x (left of the 
 CAP_X = (SAFE_LEFT + SAFE_RIGHT_X) // 2   # text centre, shifted left of the frame centre
 
 
+CAP_SHIFT: dict[str, list[list[float]]] = {}  # clip id -> [t0, t1, dy] caption moves (burned-in source text)
+
+
 def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]], layout: str,
               shot_spans: list[tuple[float, float, str]] | None = None) -> str:
     """ASS captions for the output timeline; segments map source ranges to output offsets (cold open + main).
@@ -857,6 +860,19 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
     shot_y = {"face": cc.get("y_shots_face", y), "face_tight": cc.get("y_shots_face", y), "duo": cc.get("y_shots_duo", y), "fit": cc.get("y_fit", y)}
 
     def placed(t0: float, t1: float) -> list[tuple[float, float, int]]:
+        parts = placed_base(t0, t1)
+        shifts = CAP_SHIFT.get(clip.get("id"), [])
+        if not shifts:
+            return parts
+        out = []
+        for lo, hi, yy in parts:
+            cuts = sorted({lo, hi} | {c for a, b, _ in shifts for c in (a, b) if lo < c < hi})
+            for u, v in zip(cuts, cuts[1:]):
+                dy = next((d for a, b, d in shifts if a <= (u + v) / 2 <= b), 0)
+                out.append((u, v, int(yy + dy)))
+        return out
+
+    def placed_base(t0: float, t1: float) -> list[tuple[float, float, int]]:
         if not shot_spans:
             return [(t0, t1, y)]
         parts = []
@@ -1170,6 +1186,9 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             log(f"  meme effects: {meme_fx} at {window}")
         else:
             cap_in = "cv"
+        # Caption-free low-res copy for the burned-in-text QA (same frames, no subtitles, no logo).
+        graph.append(f"[{cap_in}]split[cap_a][cap_b];[cap_b]fps=2,scale=540:960[nc]")
+        cap_in = "cap_a"
         logo = source.get("logo")
         if logo:
             # Campaign-mandated logo (Alliance): white padded box, centred under the video panel, whole clip.
@@ -1189,14 +1208,32 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             "-r", rc["fps"], "-c:v", "libx264", "-preset", rc["preset"], "-crf", rc["crf"], "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
         ]
+        nocap = ["-map", "[nc]", "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-pix_fmt", "yuv420p",
+                 "nocap.mp4"]
         (cdir / "graph.txt").write_text(";\n".join(graph))
-        run(cmd + ["-movflags", "+faststart", out.name], cwd=cdir)
+        run(cmd + ["-movflags", "+faststart", out.name] + nocap, cwd=cdir)
         check_output(out)
         # Preview frame for the review step (taken after the hook disappears).
         run([tool("ffmpeg"), "-v", "error", "-y", "-ss", min(3.0, (clip["end"] - clip["start"]) / 2),
              "-i", out.name, "-frames:v", "1", "-q:v", "3", "preview.jpg"], cwd=cdir)
         write_json(cdir / "clip.json", clip)
-        from .qa import run_all
+        from .qa import plan_caption_shift, run_all
+        if clip["id"] not in CAP_SHIFT:
+            shifts = plan_caption_shift(cdir, fonts)
+            if shifts:
+                # Source lower-third/inset under the captions: move them clear and render this clip again.
+                CAP_SHIFT[clip["id"]] = shifts
+                log(f"  burned-in source text under captions, moving captions: {shifts}")
+                prev = os.environ.get("CLIPPER_ONLY")
+                os.environ["CLIPPER_ONLY"] = clip["id"]
+                try:
+                    outputs += render(cfg, job_id)
+                finally:
+                    if prev is None:
+                        os.environ.pop("CLIPPER_ONLY", None)
+                    else:
+                        os.environ["CLIPPER_ONLY"] = prev
+                continue
         problems = run_all(cfg, cdir, audio_fn, [(e_, off_ + e_ - s_) for s_, e_, off_ in segments],
                            [(s_, off_) for s_, e_, off_ in segments])
         if problems:

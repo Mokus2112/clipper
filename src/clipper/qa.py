@@ -24,7 +24,7 @@ def _duration(video: Path) -> float:
                                  "-of", "csv=p=0", str(video)], capture_output=True, text=True).stdout)
 
 
-def text_boxes(cdir: Path, dur: float, fonts: Path) -> list[tuple[float, tuple[int, int, int, int]]]:
+def text_boxes(cdir: Path, dur: float, fonts: Path, split: bool = False) -> list[tuple[float, tuple[int, int, int, int]]]:
     """Bounding box of all on-screen text (captions + hook) every 0.1 s, rendered alone on black."""
     raw = subprocess.run(
         [tool("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", f"color=black:s=1080x1920:r=10:d={dur:.2f}",
@@ -35,8 +35,17 @@ def text_boxes(cdir: Path, dur: float, fonts: Path) -> list[tuple[float, tuple[i
     out = []
     for i, f in enumerate(frames):
         ys, xs = np.nonzero(f > 40)
-        if len(xs):
+        if not len(xs):
+            continue
+        if not split:
             out.append((i / 10, (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))))
+            continue
+        # one box per text block (hook, caption): rows separated by more than 80 px are different blocks
+        rows = np.unique(ys)
+        starts = [0] + [k for k in range(1, len(rows)) if rows[k] - rows[k - 1] > 80]
+        for a, b in zip(starts, starts[1:] + [len(rows)]):
+            m = (ys >= rows[a]) & (ys <= rows[b - 1])
+            out.append((i / 10, (int(xs[m].min()), int(rows[a]), int(xs[m].max()), int(rows[b - 1]))))
     return out
 
 
@@ -344,6 +353,94 @@ def check_uncaptioned_speech(video: Path, ass: Path, thr_db: float = -35.0, min_
     return [f"speech without caption at {', '.join(out[:6])}"] if out else []
 
 
+def burned_text_conflicts(cdir: Path, fonts: Path, min_chars: int = 4, dy_at=None, captions_only: bool = False) -> list[tuple[float, tuple[int, int, int, int], str]]:
+    """Source text/graphics burned into the picture under our captions (lower-thirds, insets).
+
+    Needs nocap.mp4 (render output without subtitles, 540x960, 2 fps). For every sampled frame
+    the box of our caption text is OCRed in the caption-free frame; readable text there is a conflict.
+    Returns (t, box in 1080x1920 coordinates, text).
+    """
+    import cv2
+    nocap = cdir / "nocap.mp4"
+    if not nocap.exists():
+        return []
+    boxes = text_boxes(cdir, _duration(cdir / "short.mp4"), fonts, split=True)
+    by_t = {}
+    for t, b in boxes:
+        by_t.setdefault(round(t * 2) / 2, []).append(b)
+    cap = cv2.VideoCapture(str(nocap))
+    out, i = [], 0
+    while True:
+        ok, fr = cap.read()
+        if not ok:
+            break
+        t = i / 2
+        i += 1
+        bs = sorted(by_t.get(t, []), key=lambda b: b[1])
+        for k, (bx0, by0, bx1, by1) in enumerate(bs):
+            is_cap = k == len(bs) - 1  # the lowest block is the caption, the rest is the hook
+            if captions_only and not is_cap:
+                continue
+            dy = dy_at(t) if (dy_at and is_cap) else 0
+            x0, y0, x1, y1 = bx0 // 2, (by0 + dy) // 2, bx1 // 2, (by1 + dy) // 2
+            ex = 40  # look beyond the box: a label only partly under it is still unreadable
+            ry0, rx0 = max(0, y0 - ex), max(0, x0 - 20)
+            roi = fr[ry0:y1 + ex, rx0:x1 + 20]
+            if roi.size == 0:
+                continue
+            g = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            if cv2.Canny(g, 100, 200).mean() / 255 < 0.02:
+                continue
+            g = cv2.resize(g, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+            res = subprocess.run(["tesseract", "stdin", "stdout", "--psm", "6", "tsv"],
+                                 input=cv2.imencode(".png", g)[1].tobytes(), capture_output=True)
+            words = []
+            for row in res.stdout.decode(errors="ignore").splitlines()[1:]:
+                c = row.split("\t")
+                if len(c) == 12 and float(c[10]) >= 60 and re.search(r"[A-Za-z0-9]{2,}", c[11]):
+                    wx0, wy0 = rx0 + int(c[6]) / 3, ry0 + int(c[7]) / 3
+                    wx1, wy1 = wx0 + int(c[8]) / 3, wy0 + int(c[9]) / 3
+                    if wx0 < x1 and wx1 > x0 and wy0 < y1 and wy1 > y0:  # overlaps our text box
+                        words.append(c[11])
+            txt = " ".join(words)
+            if len(re.sub(r"\W", "", txt)) >= min_chars:
+                out.append((t, (x0 * 2, y0 * 2, x1 * 2, y1 * 2), txt))
+    cap.release()
+    return out
+
+
+def plan_caption_shift(cdir: Path, fonts: Path) -> list[list[float]]:
+    """[t0, t1, dy] spans (output seconds) where captions must move to clear burned-in source text."""
+    hits = burned_text_conflicts(cdir, fonts, captions_only=True)
+    if not hits:
+        return []
+    spans: list[list[float]] = []
+    for t, _, _ in hits:
+        if spans and t - 0.5 <= spans[-1][1]:
+            spans[-1][1] = t + 0.5
+        else:
+            spans.append([t - 0.5, t + 0.5])
+    boxes = text_boxes(cdir, _duration(cdir / "short.mp4"), fonts, split=True)
+    out = []
+    for a, b in spans:
+        inside = [bx for t, bx in boxes if a <= t <= b and bx[3] > 1100]
+        top, bot = min(bx[1] for bx in inside), max(bx[3] for bx in inside)
+        for dy in (-260, -400, -520, 240, 360):
+            if top + dy < TOP or bot + dy > BOTTOM:
+                continue
+            left = burned_text_conflicts(cdir, fonts, dy_at=lambda t, a=a, b=b, dy=dy: dy if a <= t <= b else 0,
+                                           captions_only=True)
+            if all(not (a <= t <= b) for t, _, _ in left):
+                out.append([max(0.0, a), b, dy])
+                break
+    return out
+
+
+def check_burned_text(cdir: Path, fonts: Path) -> list[str]:
+    return [f"burned-in source text under captions at {t:.1f}s box y{b[1]}-{b[3]}: '{txt[:40]}'"
+            for t, b, txt in burned_text_conflicts(cdir, fonts)]
+
+
 def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, float]],
             source_starts: list[tuple[float, float]] = ()) -> list[str]:
     video = cdir / "short.mp4"
@@ -360,5 +457,6 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
     problems += check_caption_words(video, cdir / "captions.ass")
     problems += check_repeated_words(video, cdir / "captions.ass")
     problems += check_uncaptioned_speech(video, cdir / "captions.ass")
+    problems += check_burned_text(cdir, path_of(cfg, "fonts"))
     (cdir / "qa.txt").write_text("\n".join(problems) + "\n" if problems else "ok\n")
     return problems
