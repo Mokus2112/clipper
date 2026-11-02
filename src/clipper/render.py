@@ -1496,7 +1496,10 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         nocap = ["-map", "[nc]", "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-pix_fmt", "yuv420p",
                  "nocap.mp4"]
         (cdir / "graph.txt").write_text(";\n".join(graph))
-        run(cmd + ["-movflags", "+faststart", out.name] + nocap, cwd=cdir)
+        try:
+            run(cmd + ["-movflags", "+faststart", out.name] + nocap, cwd=cdir)
+        finally:
+            seg_wav.unlink(missing_ok=True)  # temp segment audio, never part of the clip folder's output
         check_output(out)
         # Preview frame for the review step (taken after the hook disappears).
         run([tool("ffmpeg"), "-v", "error", "-y", "-ss", min(3.0, (clip["end"] - clip["start"]) / 2),
