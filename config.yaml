@@ -36,6 +36,16 @@ rank:
   clips_per_vod: 5
   min_score: 7        # drop clips the ranker scores below this (1-10); no clip is better than a weak clip
 
+prescreen:               # cheap check of ranked candidates before transcribe/render; reasons in <job>/prescreen.json
+  enabled: true
+  fps: 1.0
+  min_identity_ratio: 0.6      # identity sources: share of samples with the locked person
+  max_multi_face_ratio: 0.4    # other sources: share of samples with 2+ faces
+  max_cuts_per_40s: 10
+  max_top_text_ratio: 0.15     # share of samples with OCR words in the top strip
+  max_silence_ratio: 0.25
+  silence_db: -70
+
 clip:
   min_sec: 18
   max_sec: 50

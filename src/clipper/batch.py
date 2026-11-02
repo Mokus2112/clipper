@@ -53,13 +53,14 @@ def run_batch(cfg: dict, source_names: list[str], notify: bool = True) -> dict:
         from .detect import detect
         from .transcribe import transcribe_clips, transcribe_full
         from .rank import rank
+        from .prescreen import prescreen
         from .render import render
         from .common import job_dir, remove_source
         try:
             job = fetch(cfg, name, url, section=None)
             detect(cfg, job)
             transcribe_full(cfg, job)
-            if rank(cfg, job):
+            if rank(cfg, job) and prescreen(cfg, job):
                 transcribe_clips(cfg, job)
                 render(cfg, job)
                 clips = [i for i in review_queue.load(cfg)

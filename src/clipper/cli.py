@@ -57,10 +57,11 @@ def main() -> None:
             from .detect import detect
             from .transcribe import transcribe_clips, transcribe_full
             from .rank import rank
+            from .prescreen import prescreen
             from .render import render
             detect(cfg, job)
             transcribe_full(cfg, job)
-            if rank(cfg, job):
+            if rank(cfg, job) and prescreen(cfg, job):
                 transcribe_clips(cfg, job)
                 render(cfg, job)
                 if cfg["telegram"]["notify"] and not a.no_notify:
