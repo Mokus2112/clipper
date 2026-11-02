@@ -31,6 +31,10 @@ Hard rules:
 - start_quote: the first 5-8 words of the clip, copied EXACTLY from the transcript (same words, same order).
   It must be the beginning of a full sentence: the transcript text right before it ends with . ? or !
 - end_quote: the last 5-8 words of the clip, copied EXACTLY from the transcript, ending a sentence.
+  End as soon as the moment resolves (the answer, the punchline, the reaction): at most one short beat after it,
+  no trailing chatter, no "anyway", no wind-down. Watching to the end and replays are ranking signals on every
+  platform, so a clip that stops right at its peak beats a longer one that fades out. If one natural ending
+  flows back into the opening line (a question answered by the start, a callback), prefer it: it invites a rewatch.
 - payoff_quote: the payoff as a short complete phrase or sentence (3-10 words), copied EXACTLY from the
   transcript, inside the clip. It must be understandable as the first thing a viewer hears.
   No strong profanity (f-word, s-word...) in the payoff_quote: it plays in the first seconds.
@@ -50,9 +54,13 @@ Hard rules:
 - story: one sentence, "setup -> payoff".
 - caption: one short line for TikTok/Instagram, under 100 characters, curiosity-driven, may differ from the title.
   The same rule as for hook/title: no allegations about real people stated as fact.
+- Prefer moments where the streamer/speaker reacts, explains or comments in their own words over raw footage
+  with little narration: platforms demote reused clips "with little or no narrative" (YouTube reused/inauthentic
+  content, TikTok unoriginal content, Instagram originality rules 2026).
 - hashtags: 3-5 relevant lowercase hashtags without "#" (streamer name first, no generic spam like fyp/viral).
 - score: 1-10 for Shorts potential. Be harsh: 5 = average, 7 = clearly good, 9 = viral. Only return clips scoring 7+.
-  Test: would a stranger scrolling past stop within 1 second, and would they share it? Mild jokes, food reviews,
+  Test: would a stranger scrolling past stop within 1 second, and would they send it to a friend in a DM?
+  (Sends per reach is one of the strongest ranking signals on Reels; a clip nobody would send is a 6 at most.) Mild jokes, food reviews,
   casual banter and inside jokes are 5-6 at most. Loud genuine reactions, fails, shocking reveals, wins/losses
   with stakes, and chaos involving other people score higher.
 - If nothing qualifies, return [] and nothing else. Returning [] is a correct answer for a boring stream.
