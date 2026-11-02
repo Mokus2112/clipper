@@ -255,7 +255,11 @@ def check_caption_words(video: Path, ass: Path) -> list[str]:
         n = norm(w)
         if len(n) < 4 or n in FILLERS or "*" in w:
             continue
-        if not any((h == n or h.startswith(n[:4])) and abs(t - s0) <= 1.5 for h, t in heard):
+        alts = {n}
+        if re.fullmatch(r"(twen|thir|for|fif|six|seven|eigh|nine)ties", n):  # whisper writes 'nineties' as '90s'
+            alts.add({"twen": "20", "thir": "30", "for": "40", "fif": "50", "six": "60", "seven": "70",
+                      "eigh": "80", "nine": "90"}[n[:-4]] + "s")
+        if not any((h in alts or h == n or h.startswith(n[:4])) and abs(t - s0) <= 1.5 for h, t in heard):
             missing.append(f"{w}@{s0:.2f}")
     missing = sorted(set(missing))
     return [f"caption words not heard in the audio: {', '.join(missing[:8])}"] if len(missing) >= 2 else []
