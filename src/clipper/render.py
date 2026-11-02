@@ -532,10 +532,15 @@ def ass_escape(text: str) -> str:
     return text.replace("\\", "").replace("{", "(").replace("}", ")")
 
 
-def chunk_words(words: list[dict], max_words: int, max_sec: float) -> list[list[dict]]:
+def chunk_words(words: list[dict], max_words: int, max_sec: float,
+                fits=None) -> list[list[dict]]:
+    """Caption lines of <= max_words words. fits(chunk) -> bool, when given, is the pixel check:
+    a word that would push the line past the safe width starts a new line (a single word always fits)."""
+    fits = fits or (lambda ch: True)
     chunks, cur = [], []
     for w in words:
-        if cur and (len(cur) >= max_words or w["s"] - cur[-1]["e"] > 0.6 or w["e"] - cur[0]["s"] > max_sec):
+        if cur and (len(cur) >= max_words or w["s"] - cur[-1]["e"] > 0.6 or w["e"] - cur[0]["s"] > max_sec
+                    or not fits(cur + [w])):
             chunks.append(cur)
             cur = []
         cur.append(w)
@@ -545,8 +550,9 @@ def chunk_words(words: list[dict], max_words: int, max_sec: float) -> list[list[
     # but never past max_words (a merged 6-word line overflowed the safe width, 080536-c2).
     merged: list[list[dict]] = []
     for ch in chunks:
-        fits = bool(merged) and len(merged[-1]) + len(ch) <= max_words and ch[0]["s"] - merged[-1][-1]["e"] <= 0.6
-        if fits and (ch[-1]["e"] - ch[0]["s"] < MIN_CAPTION_SEC or merged[-1][-1]["e"] - merged[-1][0]["s"] < MIN_CAPTION_SEC):
+        ok = (bool(merged) and len(merged[-1]) + len(ch) <= max_words and ch[0]["s"] - merged[-1][-1]["e"] <= 0.6
+              and fits(merged[-1] + ch))
+        if ok and (ch[-1]["e"] - ch[0]["s"] < MIN_CAPTION_SEC or merged[-1][-1]["e"] - merged[-1][0]["s"] < MIN_CAPTION_SEC):
             merged[-1] = merged[-1] + ch
         else:
             merged.append(ch)
@@ -870,18 +876,64 @@ TOP_BLUR: dict[str, list[list[float]]] = {}  # clip id -> [t0, t1, x0, y0, x1, y
 CAP_SHIFT: dict[str, list[list[float]]] = {}  # clip id -> [t0, t1, dy] caption moves (burned-in source text)
 
 
+HOOK_BAR = 10          # yellow accent bar at the left edge of the hook box, px
+HOOK_HAIR = 0.35       # close-up: hair above the face box, as a share of the face height
+HOOK_CAP_GAP = 90      # min px between the hook box bottom and the caption top (reviewer: >= 140 centre gap)
+
+
+def _fonts(fonts_dir, family):
+    if not fonts_dir:
+        return None
+    from .textfit import font_file
+    try:
+        return font_file(Path(fonts_dir), family)
+    except FileNotFoundError:
+        log(f"  WARN font {family!r} not in {fonts_dir}: text widths are estimated")
+        return None
+
+
+def _width(font, text, size, spacing=0.0, outline=0.0, shadow=0.0):
+    if font is None:
+        return len(text) * size * 0.45 + spacing * len(text) + 2 * outline + shadow
+    from .textfit import drawn_width
+    return drawn_width(font, text, size, spacing, outline, shadow)
+
+
+def _cap_h(font, size):
+    if font is None:
+        return size * 0.7
+    from .textfit import cap_height
+    return cap_height(font, size)
+
+
+def _cap_off(font, size):
+    if font is None:
+        return 0.0
+    from .textfit import cap_center_offset
+    return cap_center_offset(font, size)
+
+
 def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]], layout: str,
-              shot_spans: list[tuple[float, float, str]] | None = None) -> str:
+              shot_spans: list[tuple] | None = None, fonts_dir: Path | None = None) -> str:
     """ASS captions for the output timeline; segments map source ranges to output offsets (cold open + main).
 
-    shot_spans (output start, end, kind) switch the caption position per camera shot in the
+    shot_spans (output start, end, kind[, geometry]) switch the caption position per camera shot in the
     shots layout: lower on close-ups (off the face), at the seam on stacked duo shots. A caption
-    line that crosses a cut is split there so each part sits at its shot's position.
+    line that crosses a cut is split there so each part sits at its shot's position. geometry
+    (close-ups) = {"ft", "fb": face box top/bottom in output px, "cap": push-in cap, "t0": shot start}
+    places the hook above the hair or under the chin, never on the head.
+
+    fonts_dir: where the caption/hook fonts live; widths are then measured from the real font
+    (captions <= captions.max_width px incl. outline and shadow, hook shrinks to fit, min hook.min_size).
     """
     cc, hc, rc = cfg["captions"], cfg["hook"], cfg["render"]
     W, H = rc["width"], rc["height"]
     y = cc[f"y_{layout}"]
     shot_y = {"face": cc.get("y_shots_face", y), "face_tight": cc.get("y_shots_face", y), "duo": cc.get("y_shots_duo", y), "fit": cc.get("y_fit", y)}
+    cap_font = _fonts(fonts_dir, cc["font"])
+    size, spacing = cc["size"], cc.get("spacing", 0)
+    outline, shadow = cc["outline"], cc.get("shadow", 2)
+    bold = -1 if cc.get("bold", True) else 0
 
     def placed(t0: float, t1: float) -> list[tuple[float, float, int]]:
         parts = placed_base(t0, t1)
@@ -900,74 +952,151 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
         if not shot_spans:
             return [(t0, t1, y)]
         parts = []
-        for a, b, kind in shot_spans:
+        for a, b, kind, *_ in shot_spans:
             lo, hi = max(t0, a), min(t1, b)
             if hi - lo > 0.005:
                 parts.append((lo, hi, shot_y.get(kind, y)))
         return parts or [(t0, t1, y)]
 
     lines = [
-        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}", "WrapStyle: 0", "",
+        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}", "WrapStyle: 2", "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
         "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
         "MarginR, MarginV, Encoding",
-        f"Style: Cap,{cc['font']},{cc['size']},{cc['color']},&H000000FF,&H00000000,&H64000000,"
-        f"-1,0,0,0,100,100,0,0,1,{cc['outline']},2,5,{SAFE_LEFT},{W - SAFE_RIGHT_X},0,1",
-        f"Style: Hook,{cc['font']},{hc['size']},&H00000000,&H000000FF,{hc['box']},{hc['box']},"
-        # Box padding (outline 18) included: the box itself stays inside the safe zone.
-        f"-1,0,0,0,100,100,0,0,3,18,0,5,{SAFE_LEFT + 20},{W - SAFE_RIGHT_X + 20},0,1",
+        f"Style: Cap,{cc['font']},{size},{cc['color']},&H000000FF,&H00000000,{cc.get('back', '&H64000000')},"
+        f"{bold},0,0,0,100,100,{spacing},0,1,{outline},{shadow},5,{SAFE_LEFT},{W - SAFE_RIGHT_X},0,1",
+        f"Style: HookBox,Arial,20,&H00111111,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1",
+        f"Style: HookText,{hc.get('font', cc['font'])},{hc['size']},{hc.get('color', '&H00FFFFFF')},&H000000FF,"
+        f"&H00000000,&H00000000,{-1 if hc.get('bold', False) else 0},0,0,0,100,100,{hc.get('spacing', 0)},0,1,0,0,4,0,0,0,1",
         "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     if hc["enabled"] and clip.get("hook"):
-        # The hook stays up through the cold open and the first seconds of the setup.
-        cold = clip.get("cold_len", segments[0][1] - segments[0][0] if len(segments) > 1 else 0.0)
-        # Per shot like the captions: over the chest on close-ups (the top of the frame is the
-        # forehead there), at the top on duo/fit shots.
-        hook_y = {"face": hc.get("y_face", hc["y"]), "face_tight": hc["y"], "duo": hc.get("y_duo", hc["y"]), "fit": hc["y"]}
-        spans = shot_spans or [(0.0, 1e9, "")]
-        t_end = cold + hc["seconds"]
-        for a, b, kind in spans:
-            lo, hi = max(0.0, a), min(t_end, b)
-            if kind == "duo" and hc.get("skip_duo", True):
-                continue  # the duo box always lands on the upper speaker's head (reviewer FAIL 131638-c1)
-            if hi - lo > 0.005:
-                lines.append(
-                    f"Dialogue: 1,{ass_time(lo)},{ass_time(hi)},Hook,,0,0,0,,"
-                    f"{{\\pos({CAP_X},{hook_y.get(kind, hc['y'])})}}{ass_escape(clip['hook'])}"
-                )
+        lines += hook_events(cfg, clip, segments, shot_spans, fonts_dir, cap_font)
+
+    max_w = cc.get("max_width", SAFE_RIGHT_X - SAFE_LEFT - 70)
+    lead = cc.get("onset_lead", 0.03)
+    fade = cc.get("fade_ms", 70)
+    blur = cc.get("blur", 1)
+    hl_out = cc.get("highlight_outline")
+
+    def shown(w: dict) -> str:
+        t = censor(fix_names(w["w"], clip.get("name_fixes", {})))
+        return ass_escape(t.upper() if cc["uppercase"] else t)
+
+    def fits(ch: list[dict]) -> bool:
+        return _width(cap_font, " ".join(shown(w) for w in ch), size, spacing, outline, shadow) <= max_w
+
     for seg_s, seg_e, off in segments:
-        # A word is captioned only if its middle is inside the segment (no half-heard word at a cut).
         # A word is captioned only if it starts inside the segment and its middle is inside too:
         # no word from before the cut (cold open began after "To this day,"), no half-heard word at the end.
         words = [w for w in caption_words(merge_punct(clip.get("words", [])))
                  if w["s"] >= seg_s - 0.02 and (w["s"] + w["e"]) / 2 <= seg_e]
-        chunks = chunk_words(words, cc["max_words"], cc["max_chunk_sec"])
+        chunks = chunk_words(words, cc["max_words"], cc["max_chunk_sec"], fits if cap_font else None)
         for ci, chunk in enumerate(chunks):
-            next_start = chunks[ci + 1][0]["s"] if ci + 1 < len(chunks) else None
-            texts = [ass_escape(censor(fix_names(w["w"], clip.get("name_fixes", {}))).upper() if cc["uppercase"]
-                                else censor(fix_names(w["w"], clip.get("name_fixes", {}))))
-                     for w in chunk]
+            # The line appears `lead` s before the first word's onset, so the fade-in is done when
+            # the sound starts; the previous line gives way at the same moment (never two lines).
+            next_start = chunks[ci + 1][0]["s"] - lead if ci + 1 < len(chunks) else None
+            texts = [shown(w) for w in chunk]
             pop = cc.get("pop", 1.0)
             pop_tag = f"{{\\fscx{int(pop*100)}\\fscy{int(pop*100)}\\t(0,80,\\fscx100\\fscy100)}}" if pop > 1.0 else ""
+            chunk_t0 = max(chunk[0]["s"] - lead, seg_s)
+            chunk_t1 = min(chunk[-1]["e"] + 0.12, next_start if next_start is not None else 1e9, seg_e)
+            fade_tag = f"\\fad({fade},0)" if fade and chunk_t1 - chunk_t0 >= 0.2 else ""
+            first = True
             for i, w in enumerate(chunk):
-                t0 = w["s"] if i else chunk[0]["s"]
+                t0 = w["s"] if i else chunk_t0
                 t1 = chunk[i + 1]["s"] if i + 1 < len(chunk) else chunk[-1]["e"] + 0.12  # a word's voiced tail outlasts its aligned end
                 if next_start is not None:
                     t1 = min(t1, next_start)  # two caption lines must never be on screen together
                 t0, t1 = max(t0, seg_s), min(t1, seg_e)
                 if t1 <= t0:
                     continue
-                parts = [f"{{\\c{cc['highlight']}}}{t}{{\\c{cc['color']}}}" if j == i else t
-                         for j, t in enumerate(texts)]
+                if hl_out:
+                    on, off_ = f"{{\\3c{hl_out}\\c{cc['highlight']}}}", f"{{\\3c&H00000000\\c{cc['color']}}}"
+                else:
+                    on, off_ = f"{{\\c{cc['highlight']}}}", f"{{\\c{cc['color']}}}"
+                parts = [f"{on}{t}{off_}" if j == i else t for j, t in enumerate(texts)]
                 for a, b, yy in placed(t0 - seg_s + off, t1 - seg_s + off):
-                    if b - a < 0.03:
+                    if b - a < 0.05:
                         continue  # a sliver flashes one frame at a cut, lit during silence
+                    tags = f"\\pos({CAP_X},{yy})" + (f"\\blur{blur}" if blur else "") + (fade_tag if first else "")
+                    first = False
                     lines.append(
                         f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Cap,,0,0,0,,"
-                        f"{{\\pos({CAP_X},{yy})}}{pop_tag}{' '.join(parts)}"
+                        f"{{{tags}}}{pop_tag}{' '.join(parts)}"
                     )
     return "\n".join(lines) + "\n"
+
+
+def hook_events(cfg: dict, clip: dict, segments, shot_spans, fonts_dir, cap_font) -> list[str]:
+    """The hook: one line of text in a dark box with a yellow bar, left-aligned at the safe edge.
+
+    The font shrinks to fit the safe width, never below hook.min_size (rank.py keeps hooks short
+    enough). On close-ups the box goes above the hair or under the chin with room to the captions;
+    if neither fits, that shot gets no hook (reviewer: the hook never sits on the head).
+    """
+    cc, hc, rc = cfg["captions"], cfg["hook"], cfg["render"]
+    font = _fonts(fonts_dir, hc.get("font", cc["font"]))
+    text = ass_escape(clip["hook"]).upper()
+    pad = hc.get("pad", 18)
+    avail = SAFE_RIGHT_X - SAFE_LEFT - HOOK_BAR - 2 * pad
+    size = hc["size"]
+    while size > hc.get("min_size", 80) and _width(font, text, size, hc.get("spacing", 0)) > avail:
+        size -= 2
+    tw = _width(font, text, size, hc.get("spacing", 0))
+    if tw > avail:
+        log(f"  WARN hook {text!r} is {tw:.0f} px at {size} px, wider than {avail} px")
+    ch = _cap_h(font, size)
+    bh = ch + 2 * pad
+    x0, x1 = SAFE_LEFT, SAFE_LEFT + HOOK_BAR + pad + min(tw, avail) + pad
+    cap_top = cc.get("y_shots_face", 1410) - _cap_h(cap_font, cc["size"]) / 2 - cc["outline"]
+
+    def slot(kind: str, geo: dict | None, lo: float, hi: float) -> float | None:
+        """Box centre y for this span, None = no hook here."""
+        if kind == "duo" and hc.get("skip_duo", True):
+            return None  # the duo box always lands on the upper speaker's head (reviewer FAIL 131638-c1)
+        if not kind.startswith("face"):
+            return hc["y"]
+        if not geo:
+            return hc.get("y_face", hc["y"])
+        ft, fb = geo["ft"], geo["fb"]
+        # Above the hair: the push-in is anchored at SAFE_TOP, so the head only moves down.
+        top = SAFE_TOP
+        if top + bh <= ft - (HOOK_HAIR * (fb - ft) + 10):
+            return top + bh / 2
+        # Under the chin, at the deepest zoom this span reaches.
+        z = min(geo["cap"], 1 + rc.get("push_in_rate", 0.0) * max(0.0, hi - geo["t0"]))
+        fb_z = SAFE_TOP + (fb - SAFE_TOP) * z
+        top = fb_z + 40
+        if top + bh + HOOK_CAP_GAP <= cap_top:
+            return top + bh / 2
+        return None
+
+    cold = clip.get("cold_len", segments[0][1] - segments[0][0] if len(segments) > 1 else 0.0)
+    t_end = cold + hc["seconds"]
+    out, shown = [], 0.0
+    off = _cap_off(font, size)
+    for a, b, kind, *rest in (shot_spans or [(0.0, 1e9, "")]):
+        lo, hi = max(0.0, a), min(t_end, b)
+        if hi - lo < 0.05:
+            continue
+        yc = slot(kind, rest[0] if rest else None, lo, hi)
+        if yc is None:
+            continue
+        y0, y1 = yc - bh / 2, yc + bh / 2
+        t = f"{ass_time(lo)},{ass_time(hi)}"
+        rect = lambda u0, u1: f"m {u0:.0f} {y0:.0f} l {u1:.0f} {y0:.0f} l {u1:.0f} {y1:.0f} l {u0:.0f} {y1:.0f}"
+        out += [
+            f"Dialogue: 1,{t},HookBox,,0,0,0,,{{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\c{hc.get('fill', '&H00111111')}"
+            f"\\1a{hc.get('fill_alpha', '&H26&')}}}{rect(x0, x1)}",
+            f"Dialogue: 2,{t},HookBox,,0,0,0,,{{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\c{hc['box']}}}{rect(x0, x0 + HOOK_BAR)}",
+            f"Dialogue: 3,{t},HookText,,0,0,0,,{{\\an4\\pos({x0 + HOOK_BAR + pad},{yc - off:.0f})\\fs{size}}}{text}",
+        ]
+        shown += hi - lo
+    if shown < 1.0:
+        log(f"  WARN hook shown only {shown:.2f} s (no head-free slot on the close-ups)")
+    return out
 
 
 def music_ratio(jd: Path, start: float, end: float, threshold: float) -> float | None:
@@ -1160,11 +1289,13 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                     # Held edge frames belong to the first/last shot's layout.
                     a = off_ + (0.0 if sh is plan[0] else sh["f0"] / info["fps"])
                     b = off_ + (e_ - s_ if sh is plan[-1] else sh["f1"] / info["fps"])
+                    geo = ({"ft": sh["ft_out"], "fb": sh["fb_out"], "cap": push_cap(cfg, sh),
+                            "t0": out_frame_time(a, rc["fps"])} if sh["kind"] == "face" and "ft_out" in sh else None)
                     shot_spans.append((out_frame_time(a, rc["fps"]), out_frame_time(b, rc["fps"]),
-                                       "face_tight" if sh.get("tight") else sh["kind"]))
+                                       "face_tight" if sh.get("tight") else sh["kind"], geo))
         lg = source.get("logo") or {}
         cap_cfg = cfg if "caption_y" not in lg else {**cfg, "captions": {**cfg["captions"], "y_fit": lg["caption_y"], "y_center": lg["caption_y"]}}
-        (cdir / "captions.ass").write_text(build_ass(cap_cfg, clip, segments, layout, shot_spans))
+        (cdir / "captions.ass").write_text(build_ass(cap_cfg, clip, segments, layout, shot_spans, fonts))
 
         inputs, graph, concat = [], [], ""
         for i, (s, e, _) in enumerate(segments):

@@ -18,3 +18,16 @@ def test_short_chunk_still_merges_when_it_fits():
     words = [w("Yes.", 0.0, 0.1), w("Exactly", 0.5, 1.0), w("right", 1.0, 1.3)]
     chunks = chunk_words(words, 3, 1.4)
     assert len(chunks) == 1
+
+
+def test_wide_line_splits_by_pixels():
+    from pathlib import Path
+    from clipper.textfit import drawn_width, font_file
+    font = font_file(Path(__file__).parent.parent / "fonts", "Bebas Neue")
+    fits = lambda ch: drawn_width(font, " ".join(x["w"].upper() for x in ch), 116, 1, 4, 3) <= 760  # noqa: E731
+    words = [w("psychological", 0.0, 0.5), w("argument", 0.5, 0.9), w("for", 0.9, 1.0),
+             w("psychologically", 1.4, 2.0), w("yes", 2.7, 3.0)]
+    chunks = chunk_words(words, 3, 1.4, fits)
+    assert all(fits(c) or len(c) == 1 for c in chunks)
+    assert [len(c) for c in chunks][:1] == [1] or [len(c) for c in chunks][:1] == [2]
+    assert [x["w"] for c in chunks for x in c] == [x["w"] for x in words]

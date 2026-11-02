@@ -35,12 +35,13 @@ Hard rules:
   transcript, inside the clip. It must be understandable as the first thing a viewer hears.
   No strong profanity (f-word, s-word...) in the payoff_quote: it plays in the first seconds.
   The quotes decide the cut; the numbers are only a hint. A clip whose quotes are not in the transcript is dropped.
-- hook: on-screen text, 3-7 words, shown over the cold open. It must create tension or a question that only
+- hook: on-screen text, 3-5 words and at most {hook_max} characters (spaces included; a hard limit, longer
+  hooks are rejected), shown in one line over the cold open. It must create tension or a question that only
   watching the clip answers. Good: "He bet his car on this", "Chat lied to him", "She was not ready for this",
   "This cost him $10,000". Bad (descriptive, no tension): "Kai's honest review of the greens",
   "Funny moment on stream", "Speed at the zoo". No emojis, no lies, not just the streamer's name.
 - If the clip only uses pronouns (he/she) for the people it is about, the hook must name them
-  ("Who pooped in Johnny Depp's bed?"), so a stranger knows who it is about.
+  ("Who pooped in Depp's bed?"), so a stranger knows who it is about.
 - Never state allegations about real people as fact in hook or title (crimes, abuse, disputed events):
   attribute them to the speaker ("Mark Manson on ...") or phrase as the speaker's story.
 - title: under {title_max} characters (the campaign prefix is added later and already counted), curiosity-driven, the streamer/speaker name (or the main keyword) within the
@@ -132,6 +133,44 @@ def title_budget(source: dict, limit: int = 60) -> int:
     return limit - (len(prefix) + 1 if prefix else 0)
 
 
+HOOK_MAX_CHARS = 28  # one line of the hook font at >= 80 px inside the safe zone
+HOOK_MAX_WORDS = 5
+
+
+def hook_budget(source: dict) -> int:
+    """Characters the model may use for the hook once the mandatory "Name: " mention is prepended."""
+    name = source.get("hook_mention", "")
+    return HOOK_MAX_CHARS - (len(name) + 2 if name else 0)
+
+
+def hook_ok(hook: str) -> bool:
+    words = [w for w in hook.split() if not w.endswith(":")]
+    return len(hook) <= HOOK_MAX_CHARS and len(words) <= HOOK_MAX_WORDS
+
+
+def shorten_hooks(cfg: dict, picks: list[dict], source: dict, cwd) -> None:
+    """One rewrite round for hooks over the limit; the renderer never shrinks a hook below 80 px."""
+    long = [i for i, p in enumerate(picks)
+            if not hook_ok(_hook_with_mention(p.get("hook", "").strip(), source.get("hook_mention", "")))]
+    if not long:
+        return
+    budget = hook_budget(source)
+    items = "\n".join(f'{n}. hook: "{picks[i]["hook"]}" | story: {picks[i].get("story", "")}'
+                       for n, i in enumerate(long))
+    prompt = (f"Rewrite each on-screen hook to at most {budget} characters (spaces included) and at most "
+              f"{HOOK_MAX_WORDS} words. Keep the same tension and meaning, no lies, no emojis, no allegations "
+              f"stated as fact.\n{items}\nReturn ONLY a JSON array of strings, one per hook, same order.")
+    try:
+        new = extract_json(ask_claude(cfg, prompt, cwd))
+    except Exception as e:  # noqa: BLE001
+        log(f"hook rewrite failed: {e}")
+        return
+    for i, h in zip(long, new):
+        if isinstance(h, str) and h.strip():
+            log(f"hook rewritten: {picks[i]['hook']!r} -> {h.strip()!r}")
+            picks[i]["hook"] = h.strip()
+
+
 def _hook_with_mention(hook: str, name: str) -> str:
     """Campaigns that require the creator's name in the on-screen text get it in the hook."""
     if name and name.lower() not in hook.lower():
@@ -204,11 +243,12 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
             streamer=source["streamer"], n=rc["clips_per_vod"],
             notes=(f"Campaign rules (hard): {source['rank_notes']}\n" if source.get("rank_notes") else ""), min_sec=cc["min_sec"],
             max_sec=cc["max_sec"] - cfg["render"]["cold_open_max"], transcript="\n".join(part),
-            title_max=title_budget(source),
+            title_max=title_budget(source), hook_max=hook_budget(source),
         ), jd)
         raw.append(out)
         picks += extract_json(out)
     (jd / "rank_raw.txt").write_text("\n\n".join(raw))
+    shorten_hooks(cfg, [p for p in picks if p.get("score", 0) >= min_score], source, jd)
 
     from .anchors import find_quote, segment_words
     seg_words = segment_words(segments)
@@ -241,6 +281,10 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
         if any(start < c["end"] and end > c["start"] for c in earlier):
             log(f"dropping pick '{p.get('title', '')[:50]}': overlaps a clip from an earlier job of the same video")
             continue
+        hook = _hook_with_mention(p["hook"].strip(), source.get("hook_mention", ""))
+        if not hook_ok(hook):
+            log(f"dropping pick '{p.get('title', '')[:50]}': hook too long after rewrite ({hook!r})")
+            continue
         ps, pe = p["payoff_start"], p["payoff_end"]
         clips.append({
             "id": f"{job_id}-c{len(clips) + 1}",
@@ -249,7 +293,7 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
             "payoff_start": round(ps, 2) if ps is not None else None,
             "payoff_end": round(pe, 2) if pe is not None else None,
             "quotes": {k: p.get(k, "") for k in ("start_quote", "end_quote", "payoff_quote")},
-            "hook": _hook_with_mention(p["hook"].strip(), source.get("hook_mention", "")),
+            "hook": hook,
             "title": p["title"].strip()[:95],
             "story": p.get("story", ""),
             "caption": p.get("caption", p["title"]).strip(),

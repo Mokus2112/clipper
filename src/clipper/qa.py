@@ -25,19 +25,21 @@ def _duration(video: Path) -> float:
 
 
 def text_boxes(cdir: Path, dur: float, fonts: Path, split: bool = False) -> list[tuple[float, tuple[int, int, int, int]]]:
-    """Bounding box of all on-screen text (captions + hook) every 0.1 s, rendered alone on black."""
+    """Bounding box of all on-screen text (captions + hook) every 0.1 s, rendered alone on mid grey.
+
+    Grey, not black: the black outline/shadow and the dark hook box count as drawn pixels too."""
     fdir = Path(fonts).resolve()
     if not fdir.is_dir() or not any(fdir.glob("*.[ot]tf")):
         raise RuntimeError(f"QA font dir missing or empty: {fdir}")  # never measure with a fallback font
     raw = subprocess.run(
-        [tool("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", f"color=black:s=1080x1920:r=10:d={dur:.2f}",
+        [tool("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", f"color=0x808080:s=1080x1920:r=10:d={dur:.2f}",
          "-vf", f"subtitles=captions.ass:fontsdir={Path(fonts).resolve()},format=gray", "-f", "rawvideo", "-"],
         cwd=cdir, capture_output=True, check=True,
     ).stdout
     frames = np.frombuffer(raw, np.uint8).reshape(-1, 1920, 1080)
     out = []
     for i, f in enumerate(frames):
-        ys, xs = np.nonzero(f > 40)
+        ys, xs = np.nonzero(np.abs(f.astype(np.int16) - 128) > 20)
         if not len(xs):
             continue
         if not split:

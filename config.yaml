@@ -74,9 +74,18 @@ render:
   track_alpha: 0.15       # EMA smoothing (lower = slower pan, less jitter)
 
 captions:
-  font: Montserrat ExtraBold
-  size: 88
-  outline: 8
+  font: Bebas Neue          # OFL, fonts/BebasNeue-Regular.ttf (style A, reviewer #269)
+  bold: false              # Bebas has one weight: faux bold would widen it past the measured width
+  size: 116
+  outline: 4
+  shadow: 3
+  spacing: 1
+  back: "&H66000000"       # shadow colour, 60% black
+  blur: 1
+  max_width: 760           # px incl. outline + shadow, measured from the font file (chunk_words fits)
+  onset_lead: 0.03         # line appears this much before the first word's onset ...
+  fade_ms: 70              # ... and fades in (no fade on lines shorter than 0.2 s)
+  highlight_outline: "&H00000000"  # dark mustard outline under the yellow word (reads on white too)
   max_words: 3
   max_chunk_sec: 1.4
   uppercase: true
@@ -92,12 +101,17 @@ captions:
 
 hook:
   enabled: true
-  box: "&H0000E0FF"   # brand yellow box, black text
+  box: "&H0000E0FF"   # brand yellow accent bar at the left of the dark box
+  fill: "&H00111111"  # dark box, white Bebas text
+  fill_alpha: "&H26&"
+  font: Bebas Neue
   seconds: 2.5
-  size: 72
+  size: 112           # shrinks to fit the safe width ...
+  min_size: 80        # ... never below this (rank.py keeps hooks <= 28 chars / 5 words)
+  pad: 18
   y: 330
   y_duo: 312          # stacked duo: top of the box at the safe zone edge, off the speaker's head
-  y_face: 1250        # shots layout close-ups: over the chest, clear of the forehead and the captions
+  y_face: 1250        # close-up fallback without face geometry; normally above the hair or under the chin
 
 music:
   threshold: 0.3   # YAMNet music score above which a second counts as "music"
