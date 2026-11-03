@@ -64,6 +64,12 @@ def metadata(cfg: dict, item: dict) -> dict:
     }
 
 
+def youtube_allowed(cfg: dict, item: dict) -> bool:
+    """False if the clip's campaign lists platforms without youtube (e.g. CoD: TikTok/IG only)."""
+    source = next((s for s in cfg.get("sources", []) if s["name"] == item.get("source")), {})
+    return "youtube" in source.get("platforms", ["youtube"])
+
+
 def upload(cfg: dict, limit: int | None = None, clip_ids: list[str] | None = None) -> list[str]:
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
@@ -78,6 +84,10 @@ def upload(cfg: dict, limit: int | None = None, clip_ids: list[str] | None = Non
         if not_ready:
             raise SystemExit(f"not approved (or unknown): {', '.join(sorted(not_ready))}")
         approved = [i for i in approved if i["id"] in clip_ids]
+        blocked = [i["id"] for i in approved if not youtube_allowed(cfg, i)]
+        if blocked:
+            raise SystemExit(f"campaign does not allow YouTube: {', '.join(blocked)}")
+    approved = [i for i in approved if youtube_allowed(cfg, i)]
     if budget <= 0 or not approved:
         log(f"nothing to upload (approved: {len(approved)}, remaining daily budget: {max(budget, 0)})")
         return []
