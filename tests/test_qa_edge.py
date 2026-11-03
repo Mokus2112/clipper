@@ -16,3 +16,12 @@ def test_silence_tail_ok():
 
 def test_clipped_start_fails():
     assert any("starts inside" in p for p in edge_problems([("ing", 0.0, 0.2), ("is.", 0.2, 0.5)], 1.0, -12))
+
+
+def test_hook_length_gate(tmp_path):
+    import json
+    from clipper.qa import check_hook_length
+    (tmp_path / "clip.json").write_text(json.dumps({"hook": "Agassi's dad built a ball machine monster"}))
+    assert check_hook_length(tmp_path)
+    (tmp_path / "clip.json").write_text(json.dumps({"hook": "Jason: Dad's monster"}))
+    assert check_hook_length(tmp_path) == []

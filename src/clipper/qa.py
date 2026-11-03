@@ -266,6 +266,19 @@ def check_caption_overlap(ass: Path) -> list[str]:
     return [f"caption: two lines on screen at {b[0]:.2f}s" for a, b in zip(hl, hl[1:]) if b[0] < a[1] - 0.005]
 
 
+def check_hook_length(cdir: Path) -> list[str]:
+    """Hard gate: the hook in clip.json must fit rank.hook_ok (28 chars, 5 words); the renderer never shrinks below 80 px."""
+    import json
+    from .rank import hook_ok, HOOK_MAX_CHARS
+    try:
+        hook = json.loads((cdir / "clip.json").read_text()).get("hook", "")
+    except (OSError, ValueError):
+        return []
+    if hook and not hook_ok(hook):
+        return [f"hook too long: {hook!r} ({len(hook)} chars, max {HOOK_MAX_CHARS}, 5 words): shorten or drop"]
+    return []
+
+
 SENT_END = (".", "?", "!", "\u2026")
 EDGE_GAP = 0.3  # s of silence after the last spoken word (or sentence-final punctuation) that makes a clean end
 
@@ -757,6 +770,7 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
         problems += check_safe_zone_text_only(cdir, path_of(cfg, "fonts"))
         problems += check_true_peak(video)
     else:
+        problems += check_hook_length(cdir)
         problems += check_safe_zone(cdir, path_of(cfg, "fonts"))
         problems += check_caption_face(cdir, path_of(cfg, "fonts"))
         problems += check_segment_ends(audio_fn, source_ends)
