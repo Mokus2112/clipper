@@ -309,6 +309,12 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
         if not cc["min_sec"] - 3 <= end - start <= cc["max_sec"] + 5:
             log(f"dropping pick '{p.get('title', '')[:50]}': quoted span is {end - start:.0f} s")
             continue
+        if (jd / "source.mp4").exists():
+            from .blackwin import BLACK_MAX, black_fraction
+            black = black_fraction(jd / "source.mp4", start, end)
+            if black > BLACK_MAX:
+                log(f"dropping pick '{p.get('title', '')[:50]}': {black:.0%} of the window is black (title cards)")
+                continue
         if any(start < c["end"] and end > c["start"] for c in clips):
             continue  # overlapping pick from two transcript parts
         if any(start < c["end"] and end > c["start"] for c in earlier):

@@ -1324,6 +1324,12 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         if rc["cold_open"] and cold[0] is not None and cold[1] - cold[0] >= 0.5:
             raw.append(cold)
         raw.append(main)
+        if source.get("montage"):  # title-card windows are dropped here (rank.py does the same for speech sources)
+            from .blackwin import BLACK_MAX, black_fraction
+            black = black_fraction(video, main[0], main[1])
+            if black > BLACK_MAX:
+                log(f"  DROP {clip['id']}: {black:.0%} of the window is black (title cards), limit {BLACK_MAX:.0%}")
+                continue
         # Frame-exact segments: (start, end, output offset), each a whole number of frames.
         segments, nframes, off = [], [], 0.0
         for a_, b_ in raw:
