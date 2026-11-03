@@ -26,3 +26,10 @@ def test_black_runs_parse_blackdetect(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(stderr=err, stdout="", returncode=0))
     runs = render.black_runs("x.mp4", 74.0, 95.0)
     assert runs == [(74.0 + 3.3, 74.0 + 3.86667), (74.0 + 17.0333, 74.0 + 19.7667)]
+
+
+def test_montage_fades_are_long_only_at_the_clip_edges():
+    assert render.montage_fades(0, 6) == (0.4, 0.05)
+    assert render.montage_fades(3, 6) == (0.05, 0.05)
+    assert render.montage_fades(5, 6) == (0.05, 0.4)
+    assert render.montage_fades(0, 1) == (0.4, 0.4)

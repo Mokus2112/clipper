@@ -678,6 +678,16 @@ AUDIO_FADE_IN = 0.04    # s, fade in at the start of every segment (card D: 40 m
 AUDIO_FADE_OUT = 0.05   # s, fade out at the end of every segment (Whisper word ends run early)
 
 
+MONTAGE_EDGE_FADE = 0.4   # s, music bed fades in at the clip start and out at the clip end
+MONTAGE_CUT_FADE = 0.05   # s, internal cuts (black cuts, tightened gaps): a 0.4 s fade at each one made 7-11 dB dips
+
+
+def montage_fades(i: int, n: int) -> tuple[float, float]:
+    """(fade in, fade out) of segment i of n for a music montage: long only at the clip's own start and end."""
+    return (MONTAGE_EDGE_FADE if i == 0 else MONTAGE_CUT_FADE,
+            MONTAGE_EDGE_FADE if i == n - 1 else MONTAGE_CUT_FADE)
+
+
 def audio_chain(idx: int, fi: float, fo: float, dur: float, a_dur: float) -> str:
     """Per-segment audio filter: fades at both cut edges, padded/trimmed to the exact output length."""
     return (f"[{idx}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
@@ -1325,10 +1335,11 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             raw.append(cold)
         raw.append(main)
         if source.get("montage"):  # title-card windows are dropped here (rank.py does the same for speech sources)
-            from .blackwin import BLACK_MAX, black_fraction
+            from .blackwin import black_fraction, black_max
             black = black_fraction(video, main[0], main[1])
-            if black > BLACK_MAX:
-                log(f"  DROP {clip['id']}: {black:.0%} of the window is black (title cards), limit {BLACK_MAX:.0%}")
+            log(f"  black_ratio {black:.3f} for {clip['id']}, limit {black_max(cfg):.2f}")
+            if black > black_max(cfg):
+                log(f"  DROP {clip['id']}: {black:.0%} of the window is black (title cards), limit {black_max(cfg):.0%}")
                 continue
         # Frame-exact segments: (start, end, output offset), each a whole number of frames.
         segments, nframes, off = [], [], 0.0
@@ -1513,7 +1524,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             # Audio exactly as long as the output video frames (n_out / output fps): any difference lets -r 30 duplicate frames.
             a_dur = n_out / float(rc["fps"]) if layout != "shots" and rc["fps"] else nframes[i] / fps
             if source.get("montage"):
-                fi = fo = 0.4  # music montage: fade the bed instead of cutting it mid-sound
+                fi, fo = montage_fades(i, len(segments))  # music montage: fade the bed at the clip edges only
             graph.append(audio_chain(len(segments) + i if wav_audio else i, fi, fo, dur, a_dur) + f"[a{i}]")
             concat += f"[l{i}][a{i}]"
         # loudnorm alone let true peaks reach -0.7 dBFS; limiter at -3 dBFS leaves room for AAC overshoot (~1.5 dB).

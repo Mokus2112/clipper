@@ -37,6 +37,7 @@ rank:
   content_check: true   # second LLM pass on the selected transcripts (mumble, sarcasm, no payoff, context, disputed claim)
   check_model: haiku
   min_score: 7        # drop clips the ranker scores below this (1-10); no clip is better than a weak clip
+  black_max: 0.15     # drop a source window where more than this share is black/title cards (blackwin; CoD c3 = 19%, good clips 0%)
 
 prescreen:               # cheap check of ranked candidates before transcribe/render; reasons in <job>/prescreen.json
   enabled: true

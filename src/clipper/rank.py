@@ -310,9 +310,10 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
             log(f"dropping pick '{p.get('title', '')[:50]}': quoted span is {end - start:.0f} s")
             continue
         if (jd / "source.mp4").exists():
-            from .blackwin import BLACK_MAX, black_fraction
+            from .blackwin import black_fraction, black_max
             black = black_fraction(jd / "source.mp4", start, end)
-            if black > BLACK_MAX:
+            log(f"black_ratio {black:.3f} for '{p.get('title', '')[:50]}' ({start:.0f}-{end:.0f} s), limit {black_max(cfg):.2f}")
+            if black > black_max(cfg):
                 log(f"dropping pick '{p.get('title', '')[:50]}': {black:.0%} of the window is black (title cards)")
                 continue
         if any(start < c["end"] and end > c["start"] for c in clips):
