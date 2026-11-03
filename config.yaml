@@ -223,7 +223,9 @@ sources:
   # Scapeworld Entertainment, $1.50 CPM, max $150/clip, TikTok + YouTube Shorts only.
   # Every approved example starts with an "Ad:" disclosure. Source: Scape gameplay streams
   # (free demo / Early Access, https://store.steampowered.com/app/4678630/Scape). No single channel.
+  # INACTIVE (2026-11-03): campaign no longer listed on contentrewards.com. Do not pick as a source.
   - name: scape-gravity
+    active: false
     streamer: Scape
     channel_url: ""   # TODO: pick a streamer VOD with Scape gameplay per run (fetch <url>)
     campaign_url: https://contentrewards.com/campaigns/8553875d-dfb0-4a97-aea5-448008876e46
@@ -235,7 +237,9 @@ sources:
     required_text: "#ad #Scape"
 
   # Clip Farm, $1.25 CPM, YouTube + Instagram, ~$9K budget left of $20K.
+  # INACTIVE (2026-11-03): campaign no longer listed on contentrewards.com. Do not pick as a source.
   - name: clipfarm-solved
+    active: false
     category_id: "22"     # People & Blogs (podcast, not gaming)
     streamer: Solved w/ Mark Manson
     channel_url: https://www.youtube.com/@IAmMarkManson
