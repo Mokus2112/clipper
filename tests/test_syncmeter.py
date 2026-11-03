@@ -91,11 +91,29 @@ def test_unmatched_caption_word_keeps_its_row(monkeypatch):
 def test_qa_counts_unmatched_apart_from_late_and_early(monkeypatch):
     from clipper import qa
     rows = [sm.Row("A", 1.0, 1.0, None), sm.Row("LOSS", 2.0, None, None),
-            sm.Row("B", 3.5, 3.0, 3.0), sm.Row("C", 4.0, None, None)]
+            sm.Row("B", 3.5, 3.0, 3.0), sm.Row("C", 4.0, None, None)]  # 50% unmatched
     monkeypatch.setattr(sm, "measure", lambda v, a: rows)
     out = qa.check_caption_sync_words(None, None)
     assert len(out) == 2
     assert out[0].startswith("caption sync (whisper+energy): 1 words") and "LOSS" not in out[0]
     assert out[1].startswith("caption sync unmatched: 2 of 4") and "LOSS@2.00" in out[1] and "C@4.00" in out[1]
     monkeypatch.setattr(sm, "measure", lambda v, a: rows[:1])
+    assert qa.check_caption_sync_words(None, None) == []
+
+
+def _rows(pattern):
+    return [sm.Row(f"W{i}", float(i), None if c == "u" else float(i), None) for i, c in enumerate(pattern)]
+
+
+def test_unmatched_threshold_is_ratio_only():
+    assert not sm.unmatched_alarming(_rows("o" * 19 + "u"))        # 5%
+    assert not sm.unmatched_alarming(_rows("o" * 9 + "u"))         # exactly 10% is not over
+    assert sm.unmatched_alarming(_rows("oouoooooouoo"))             # 2 of 12, 17%
+    assert not sm.unmatched_alarming(_rows("o" * 40 + "uuu" + "o" * 40))  # 3 in a row, 3.6%: no run rule
+    assert not sm.unmatched_alarming([])
+
+
+def test_qa_stays_silent_below_unmatched_threshold(monkeypatch):
+    from clipper import qa
+    monkeypatch.setattr(sm, "measure", lambda v, a: _rows("o" * 30 + "u"))
     assert qa.check_caption_sync_words(None, None) == []

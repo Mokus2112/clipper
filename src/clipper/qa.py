@@ -231,7 +231,7 @@ def check_caption_sync(video: Path, ass: Path) -> list[str]:
 def check_caption_sync_words(video: Path, ass: Path) -> list[str]:
     """Word-by-word sync from the shared meter (clipper.syncmeter): whisper on the finished audio is the
     reference, confirmed by the audio-energy onset. Words where the two disagree are 'uncertain' and never fail."""
-    from .syncmeter import measure, summary
+    from .syncmeter import measure, summary, unmatched_alarming
     rows = measure(video, ass)
     bad = [r for r in rows if r.verdict in ("late", "early")]
     out = []
@@ -240,7 +240,7 @@ def check_caption_sync_words(video: Path, ass: Path) -> list[str]:
         out.append(f"caption sync (whisper+energy): {len(bad)} words off by more than 150 ms: {shown} [{summary(rows)}]")
     # unmatched = caption words whisper did not find in the audio: sync unknown, counted apart from late/early
     un = [r for r in rows if r.unmatched]
-    if un:
+    if un and unmatched_alarming(rows):
         shown = ", ".join(f"{r.word}@{r.cap:.2f}" for r in un[:8])
         out.append(f"caption sync unmatched: {len(un)} of {len(rows)} caption words not found in the audio, sync unknown: {shown}")
     return out

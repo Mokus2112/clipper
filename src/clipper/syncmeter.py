@@ -186,6 +186,14 @@ def summary(rows: list[Row]) -> str:
             f"{len(bad)} beyond +-{FAIL_MS} ms")
 
 
+UNMATCHED_RATIO = 0.10
+
+
+def unmatched_alarming(rows: list[Row]) -> bool:
+    """True when more than 10% of the caption words are unmatched. Fewer are only visible in the CLI table."""
+    return bool(rows) and sum(r.unmatched for r in rows) / len(rows) > UNMATCHED_RATIO
+
+
 def main(argv: list[str]) -> int:
     rows = measure(Path(argv[1]), Path(argv[2]))
     print("cap_s   whisper_s energy_s  d_whisper_ms d_energy_ms  verdict    word")
