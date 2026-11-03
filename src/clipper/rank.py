@@ -51,6 +51,8 @@ Hard rules:
 - title: under {title_max} characters (the campaign prefix is added later and already counted), curiosity-driven, the streamer/speaker name (or the main keyword) within the
   first two words. Title and hook must be about the same moment and promise the same payoff, so the title,
   the on-screen hook and the first spoken line all point at one topic. Never promise more than the clip shows.
+- claim: ONE sentence stating what the clip says or shows and its punchline/point (what a viewer takes away).
+  If you cannot write it, the clip has nothing to say: do not return it. Empty claim = rejected.
 - story: one sentence, "setup -> payoff".
 - caption: one short line for TikTok/Instagram, under 100 characters, curiosity-driven, may differ from the title.
   The same rule as for hook/title: no allegations about real people stated as fact.
@@ -68,7 +70,7 @@ Hard rules:
 Return ONLY a JSON array:
 [{{"start": s, "end": s, "payoff_start": s, "payoff_end": s, "start_quote": "...", "end_quote": "...",
 "payoff_quote": "...", "hook": "...", "title": "...", "story": "...",
-"caption": "...", "hashtags": ["..."], "score": n, "reason": "..."}}]
+"claim": "...", "caption": "...", "hashtags": ["..."], "score": n, "reason": "..."}}]
 
 Transcript:
 {transcript}
@@ -222,6 +224,22 @@ def _earlier_spans(jd, job_id: str) -> list[dict]:
     return out
 
 
+GAP_OK = 0.3  # seconds of silence that counts as a clean cut point
+
+
+def boundary_problems(words: list[dict], i0: int, i1: int, gap: float = GAP_OK) -> list[str]:
+    """Hard cut gate on the transcript: the clip must start at a sentence start (or after >= gap of
+    silence) and end at a sentence end (or before >= gap of silence). words = segment_words output."""
+    bad = []
+    if i1 + 1 < len(words) and not words[i1]["w"].rstrip("\"')]").endswith((".", "?", "!", "…")) \
+            and words[i1 + 1]["s"] - words[i1]["e"] < gap:
+        bad.append(f"ends mid-sentence at '{words[i1]['w']}'")
+    if i0 > 0 and not words[i0 - 1]["w"].rstrip("\"')]").endswith((".", "?", "!", "…")) \
+            and words[i0]["s"] - words[i0 - 1]["e"] < gap:
+        bad.append(f"starts mid-sentence at '{words[i0]['w']}'")
+    return bad
+
+
 def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
     rc, cc = cfg["rank"], cfg["clip"]
     min_score = rc["min_score"] if min_score is None else min_score
@@ -273,6 +291,13 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
         if not qs or not qe:
             log(f"dropping pick '{p.get('title', '')[:50]}': start/end quote not found in transcript")
             continue
+        if not str(p.get("claim", "")).strip():
+            log(f"dropping pick '{p.get('title', '')[:50]}': no claim (nothing to say)")
+            continue
+        bp = boundary_problems(seg_words, qs[0], qe[1])
+        if bp:
+            log(f"dropping pick '{p.get('title', '')[:50]}': {'; '.join(bp)}")
+            continue
         start, end = seg_words[qs[0]]["s"], seg_words[qe[1]]["e"]
         qp = find_quote(seg_words, p.get("payoff_quote", ""), near=float(p.get("payoff_start", start)),
                         lo=start - 1, hi=end + 1)
@@ -303,6 +328,7 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
             "quotes": {k: p.get(k, "") for k in ("start_quote", "end_quote", "payoff_quote")},
             "hook": hook,
             "title": p["title"].strip()[:95],
+            "claim": p["claim"].strip(),
             "story": p.get("story", ""),
             "caption": p.get("caption", p["title"]).strip(),
             "hashtags": [h.strip().lstrip("#").replace(" ", "") for h in p.get("hashtags", []) if h.strip()][:5],
