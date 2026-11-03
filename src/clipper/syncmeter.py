@@ -30,12 +30,18 @@ ENV_WIN = 0.05
 class Row:
     word: str
     cap: float
-    whisper: float
+    whisper: float | None  # None: the caption word was not found in the finished audio (unmatched)
     energy: float | None
     energy_at_cap: float | None = None  # onset after a pause found near the CAPTION time
 
     @property
+    def unmatched(self) -> bool:
+        return self.whisper is None
+
+    @property
     def uncertain(self) -> bool:
+        if self.unmatched:
+            return False
         if self.energy is not None and abs(self.whisper - self.energy) * 1000 > UNCERTAIN_MS:
             return True
         # whisper says off, but a real onset sits right at the caption: whisper is the likelier error
@@ -45,14 +51,18 @@ class Row:
 
     @property
     def d_whisper(self) -> float:
+        if self.whisper is None:
+            return float("nan")
         return (self.cap - self.whisper) * 1000
 
     @property
     def d_energy(self) -> float | None:
-        return None if self.energy is None else (self.cap - self.energy) * 1000
+        return None if self.energy is None or self.whisper is None else (self.cap - self.energy) * 1000
 
     @property
     def verdict(self) -> str:
+        if self.unmatched:
+            return "unmatched"
         if self.uncertain:
             return "uncertain"
         return "late" if self.d_whisper > FAIL_MS else "early" if self.d_whisper < -FAIL_MS else "ok"
@@ -155,20 +165,24 @@ def measure(video: Path, ass: Path) -> list[Row]:
     audio = load_audio(video, 0.0, _duration(video))
     env = envelope_db(audio)
     cap, heard = caption_words(ass), whisper_words(audio)
-    rows = []
-    for i, j in pair(cap, heard):
-        rows.append(Row(cap[i][0], cap[i][1], heard[j][1], energy_onset(env, heard[j][1]),
-                        energy_onset(env, cap[i][1], 0.2, 0.2)))
+    rows, matched = [], dict(pair(cap, heard))
+    for i, (word, t) in enumerate(cap):
+        if i in matched:
+            h = heard[matched[i]][1]
+            rows.append(Row(word, t, h, energy_onset(env, h), energy_onset(env, t, 0.2, 0.2)))
+        else:  # never drop it silently: the table shows it, QA counts it apart from late/early
+            rows.append(Row(word, t, None, None, None))
     return assign_group_onsets(rows)
 
 
 def summary(rows: list[Row]) -> str:
-    sure = [r for r in rows if not r.uncertain]
+    un = sum(r.unmatched for r in rows)
+    sure = [r for r in rows if not r.uncertain and not r.unmatched]
     if not sure:
-        return "no certain words"
+        return f"no certain words, {un} unmatched"
     med = float(np.median([r.d_whisper for r in sure]))
     bad = [r for r in sure if r.verdict != "ok"]
-    return (f"{len(rows)} words, {len(sure)} certain, {len(rows) - len(sure)} uncertain; median {med:+.0f} ms; "
+    return (f"{len(rows)} words, {len(sure)} certain, {len(rows) - len(sure) - un} uncertain, {un} unmatched; median {med:+.0f} ms; "
             f"{len(bad)} beyond +-{FAIL_MS} ms")
 
 
@@ -176,6 +190,9 @@ def main(argv: list[str]) -> int:
     rows = measure(Path(argv[1]), Path(argv[2]))
     print("cap_s   whisper_s energy_s  d_whisper_ms d_energy_ms  verdict    word")
     for r in rows:
+        if r.unmatched:
+            print(f"{r.cap:6.2f}     -         -          -            -      {r.verdict:9s}  {r.word}")
+            continue
         en = "   -  " if r.energy is None else f"{r.energy:6.2f}"
         de = "    -" if r.d_energy is None else f"{r.d_energy:+5.0f}"
         print(f"{r.cap:6.2f}  {r.whisper:6.2f}    {en}    {r.d_whisper:+6.0f}       {de}      {r.verdict:9s}  {r.word}")

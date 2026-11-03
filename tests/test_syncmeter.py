@@ -71,3 +71,31 @@ def test_word_without_onset_is_judged_by_whisper_alone():
     assert not r.uncertain and r.verdict == "ok"
     late = _row("LOSS", 11.11, 10.76, None)
     assert late.verdict == "late"
+
+
+def test_unmatched_caption_word_keeps_its_row(monkeypatch):
+    """LOSS (alliance c1) is not found in the audio: it stays in the table as 'unmatched', not dropped."""
+    import numpy as np
+    from clipper import qa, transcribe
+    monkeypatch.setattr(transcribe, "load_audio", lambda *a, **k: np.zeros(16000 * 3, dtype=np.float32))
+    monkeypatch.setattr(qa, "_duration", lambda v: 3.0)
+    monkeypatch.setattr(sm, "caption_words", lambda a: [("THE", 0.5), ("LOSS", 1.0), ("OF", 1.4)])
+    monkeypatch.setattr(sm, "whisper_words", lambda a: [("the", 0.5), ("of", 1.4)])
+    rows = sm.measure(None, None)
+    assert [r.word for r in rows] == ["THE", "LOSS", "OF"]
+    assert [r.verdict for r in rows] == ["ok", "unmatched", "ok"]
+    assert not rows[1].uncertain and rows[1].d_energy is None
+    assert "1 unmatched" in sm.summary(rows)
+
+
+def test_qa_counts_unmatched_apart_from_late_and_early(monkeypatch):
+    from clipper import qa
+    rows = [sm.Row("A", 1.0, 1.0, None), sm.Row("LOSS", 2.0, None, None),
+            sm.Row("B", 3.5, 3.0, 3.0), sm.Row("C", 4.0, None, None)]
+    monkeypatch.setattr(sm, "measure", lambda v, a: rows)
+    out = qa.check_caption_sync_words(None, None)
+    assert len(out) == 2
+    assert out[0].startswith("caption sync (whisper+energy): 1 words") and "LOSS" not in out[0]
+    assert out[1].startswith("caption sync unmatched: 2 of 4") and "LOSS@2.00" in out[1] and "C@4.00" in out[1]
+    monkeypatch.setattr(sm, "measure", lambda v, a: rows[:1])
+    assert qa.check_caption_sync_words(None, None) == []

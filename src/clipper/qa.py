@@ -234,10 +234,16 @@ def check_caption_sync_words(video: Path, ass: Path) -> list[str]:
     from .syncmeter import measure, summary
     rows = measure(video, ass)
     bad = [r for r in rows if r.verdict in ("late", "early")]
-    if not bad:
-        return []
-    shown = ", ".join(f"{r.word}@{r.cap:.2f} {r.d_whisper:+.0f}ms" for r in bad[:6])
-    return [f"caption sync (whisper+energy): {len(bad)} words off by more than 150 ms: {shown} [{summary(rows)}]"]
+    out = []
+    if bad:
+        shown = ", ".join(f"{r.word}@{r.cap:.2f} {r.d_whisper:+.0f}ms" for r in bad[:6])
+        out.append(f"caption sync (whisper+energy): {len(bad)} words off by more than 150 ms: {shown} [{summary(rows)}]")
+    # unmatched = caption words whisper did not find in the audio: sync unknown, counted apart from late/early
+    un = [r for r in rows if r.unmatched]
+    if un:
+        shown = ", ".join(f"{r.word}@{r.cap:.2f}" for r in un[:8])
+        out.append(f"caption sync unmatched: {len(un)} of {len(rows)} caption words not found in the audio, sync unknown: {shown}")
+    return out
 
 
 def check_dead_air(video: Path, max_gap: float = 0.4) -> list[str]:
