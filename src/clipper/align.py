@@ -84,3 +84,15 @@ def align_words(words: list[dict], audio: np.ndarray, t0: float) -> list[dict] |
             prev_e = out[i - 1]["e"] if i > 0 else w["s"]
             w["s"] = w["e"] = prev_e
     return out
+
+
+def outliers(aligned: list[dict], ref: list[dict], limit: float = 1.0) -> list[dict]:
+    """Words whose aligned start is more than `limit` s from Whisper's start for the same word.
+
+    Whisper drifts 0.2-0.6 s, so a bigger gap means one of the two is wrong (e.g. the aligner put
+    'when he' 2.2 s late). It cannot tell which, so callers only report it.
+    """
+    if len(aligned) != len(ref):
+        return []
+    return [{"w": a["w"], "aligned": a["s"], "whisper": r["s"], "diff": round(a["s"] - r["s"], 2)}
+            for a, r in zip(aligned, ref) if abs(a["s"] - r["s"]) > limit]

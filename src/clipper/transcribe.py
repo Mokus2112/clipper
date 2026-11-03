@@ -105,6 +105,12 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
         if aligned:
             aligned = snap_to_onsets(aligned, win_audio, lo, ref=words)
         if aligned:
+            from .align import outliers
+            bad = outliers(aligned, words)
+            if bad:
+                log(f"{clip['id']}: WARN alignment differs >1 s from Whisper for {len(bad)} word(s): "
+                    + ", ".join(f"{b['w']} {b['diff']:+.1f}s" for b in bad[:6]))
+            clip["align_outliers"] = bad
             clip["words_whisper"] = words
             words = aligned
         else:
