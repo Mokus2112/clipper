@@ -845,6 +845,30 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
 
 
 EDGE_CUT = 0.25     # s; camera cuts this close to a segment edge become the edge
+MIN_END_SHOT = 0.3  # s; montage sources: a shot shorter than this near the clip end is a leftover flash, not a shot
+END_FLASH_WINDOW = 1.0  # s; how far from the end such a leftover is looked for
+MONTAGE_BLACK_MIN = 0.3  # s; montage sources: black runs longer than this (title cards) are cut out
+
+
+def trailing_flash(cuts: list[int], n: int, fps: float) -> int:
+    """First frame of the earliest leftover shot (shorter than MIN_END_SHOT) in the last END_FLASH_WINDOW seconds,
+    or n when there is none. cuts: first frames of the new shots inside the segment of n frames.
+    CoD c2: a 0.17 s blurred shot at 20.13 s, then the first 0.47 s of the next scene fading in from black."""
+    bounds = [0] + sorted(c for c in cuts if 0 < c < n) + [n]
+    for a, b in zip(bounds, bounds[1:]):
+        if a >= n - END_FLASH_WINDOW * fps and (b - a) < MIN_END_SHOT * fps and a > 0:
+            return a
+    return n
+
+
+def black_runs(video: Path, start: float, end: float, min_len: float = MONTAGE_BLACK_MIN) -> list[tuple[float, float]]:
+    """Source-time ranges inside [start, end] that are black for longer than min_len (blackdetect)."""
+    res = subprocess.run(
+        [tool("ffmpeg"), "-hide_banner", "-ss", f"{start:.6f}", "-t", f"{end - start:.6f}", "-i", str(video), "-an",
+         "-vf", f"blackdetect=d={min_len}:pic_th=0.96:pix_th=0.10", "-f", "null", "-"],
+        capture_output=True, text=True, check=True)
+    return [(start + float(a), start + float(b))
+            for a, b in re.findall(r"black_start:([\d.]+) black_end:([\d.]+)", res.stderr)]
 END_QUIET_DB = -46.0  # last 60 ms of a clip end must be at most this loud
 GAP_MAX, GAP_KEEP = 0.3, 0.1   # internal silences longer than GAP_MAX are cut down to 2 x GAP_KEEP
 SILENCE_DB = -35.0   # 20 ms RMS below this counts as silence for word-timing refinement
@@ -1317,6 +1341,8 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             lead = max([f for f in cuts if 0 < f <= edge], default=0)
             tail = min([f for f in cuts if n - edge <= f < n], default=n)
             fps = info["fps"]
+            if source.get("montage"):  # music trailers have no speech to protect: drop a leftover flash at the end
+                tail = min(tail, trailing_flash(cuts, n, fps))
 
             def speech_in(a: float, b: float) -> bool:
                 return any(w["s"] < b and w["e"] > a for w in words)
@@ -1348,6 +1374,11 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         n_main, cuts_f = nframes[-1], []
         # clip["cut_gaps"]: [start, end] source ranges of sound that is not speech (breath, noise), cut like silence.
         wgaps = [tuple(g) for g in clip.get("cut_gaps", [])]
+        if source.get("montage"):  # title cards / fades through black are cut out (the loop below keeps GAP_KEEP each side)
+            blk = black_runs(video, ms_, me_)
+            wgaps += [(a - GAP_KEEP, b + GAP_KEEP) for a, b in blk]
+            if blk:
+                log(f"  black runs cut: {', '.join(f'{a - ms_:.2f}-{b - ms_:.2f}' for a, b in blk)} (segment-relative s)")
         for ga, gb in sorted(wgaps + ([] if clip.get("no_tighten") else silence_runs(audio_fn, ms_, me_, min_len=GAP_MAX))):
             if ga - ms_ < 0.25 or me_ - gb < 0.25:
                 continue
