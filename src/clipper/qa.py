@@ -266,6 +266,40 @@ def check_caption_overlap(ass: Path) -> list[str]:
     return [f"caption: two lines on screen at {b[0]:.2f}s" for a, b in zip(hl, hl[1:]) if b[0] < a[1] - 0.005]
 
 
+SENT_END = (".", "?", "!", "\u2026")
+EDGE_GAP = 0.3  # s of silence after the last spoken word (or sentence-final punctuation) that makes a clean end
+
+
+def edge_problems(words: list[tuple[str, float, float]], dur: float, head_db: float,
+                  gap: float = EDGE_GAP) -> list[str]:
+    """words: (text, start, end) heard in the final audio. head_db: level of the first 30 ms."""
+    if not words:
+        return []
+    bad = []
+    last = words[-1]
+    tail = dur - last[2]
+    txt = last[0].rstrip("\"')]")
+    if (not txt.endswith(SENT_END) or txt.endswith("..")) and tail < gap:  # "..." = trailing off, not an end
+        bad.append(f"edge: clip ends on '{last[0]}' with only {max(tail, 0) * 1000:.0f} ms after it and no sentence end")
+    if words[0][1] < 0.08 and head_db > END_SILENCE_DB:
+        bad.append(f"edge: clip starts inside a word ('{words[0][0]}' at {words[0][1]:.2f}s, {head_db:.0f} dB at 0 s)")
+    return bad
+
+
+def check_edge_words(video: Path) -> list[str]:
+    """Hard end gate on the rendered audio: word-level re-transcription of the final clip."""
+    from faster_whisper import WhisperModel
+    from .transcribe import load_audio
+    dur = _duration(video)
+    audio = load_audio(video, 0.0, dur)
+    model = WhisperModel("small", device="cpu", compute_type="int8")
+    segs, _ = model.transcribe(audio, language="en", word_timestamps=True)
+    words = [(w.word.strip(), w.start, w.end) for s in segs for w in (s.words or []) if w.word.strip()]
+    head = audio[:480]
+    head_db = 20 * np.log10(np.sqrt(np.mean(head ** 2)) + 1e-9) if len(head) else -99
+    return edge_problems(words, dur, head_db)
+
+
 def check_caption_words(video: Path, ass: Path) -> list[str]:
     """Every captioned word (4+ letters, not a filler) must be heard: re-transcribe the output."""
     from faster_whisper import WhisperModel
@@ -735,6 +769,7 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
         problems += check_caption_sync(video, cdir / "captions.ass")
         problems += check_caption_sync_words(video, cdir / "captions.ass")
         problems += check_caption_words(video, cdir / "captions.ass")
+        problems += check_edge_words(video)
         problems += check_repeated_words(video, cdir / "captions.ass")
         problems += check_uncaptioned_speech(video, cdir / "captions.ass")
         problems += check_caption_gaps(video, cdir / "captions.ass")
