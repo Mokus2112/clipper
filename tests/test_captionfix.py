@@ -41,3 +41,21 @@ def test_moved_word_is_held_until_the_next_word():
     # incident heard at 5.46 (caption 6.34 -> moved), "is" heard 6.22
     out, _ = retime_words(words, [(14.64, 30.0, 0.0)], [("incident", 5.46), ("is", 6.22)])
     assert abs(out[0]["e"] - out[1]["s"]) < 1e-6
+
+
+def test_word_moved_into_another_segment_is_left_alone():
+    # alliance 162635 c2: 'And' (segment 1) was heard in the tail of segment 0's output span and moved there,
+    # outside its own segment: build_ass then dropped it and QA saw a caption gap.
+    segs = [(10.0, 11.0, 0.0), (11.5, 12.5, 1.0)]
+    words = [w("and", 11.52, 11.8)]
+    out, moved = retime_words(words, segs, [("and", 0.80)])
+    assert out == words and moved == []
+
+
+def test_held_word_stays_inside_its_own_segment():
+    # a word held until the next moved word must not get its middle past the segment end (dropped by build_ass)
+    segs = [(10.0, 11.0, 0.0), (11.1, 12.5, 1.0)]
+    words = [w("necessary", 10.7, 10.95), w("and", 11.12, 11.4)]
+    out, moved = retime_words(words, segs, [("necessary", 0.70), ("and", 1.25)])
+    assert moved and out[1]["s"] > 11.3
+    assert out[0]["e"] <= 11.0 and (out[0]["s"] + out[0]["e"]) / 2 <= 11.0

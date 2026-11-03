@@ -40,9 +40,16 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
         if RETIME_MIN < abs(diff) <= RETIME_MAX:
             i = idx[ci]
             w = out[i]
+            seg_s, seg_e = segments[times[i][1]][:2]
+            new_s = w["s"] - (diff - bias)
+            # build_ass captions a word only if it starts inside its segment and its middle is inside too. A word
+            # moved out of its segment (whisper heard it in the neighbouring segment's output span) would
+            # vanish from the captions and leave a hole under speech: keep its aligned time instead.
+            if not seg_s - 0.02 <= new_s <= seg_e:
+                continue
             dur = min(w["e"] - w["s"], MAX_MOVED_DUR)  # aligned durations after fillers are inflated (incident: 1.1 s)
-            w["s"] -= diff - bias
-            w["e"] = w["s"] + dur
+            w["s"] = new_s
+            w["e"] = min(new_s + dur, seg_e)
             moved.append(f"{w['w']}@{t_cap:.2f}->{t_heard:.2f}")
     # A moved word keeps its (shifted) duration, but the heard word often lasts longer: hold it until the next
     # word starts when the gap is small, or the caption leaves a hole under speech (QA caption gap).
@@ -50,7 +57,11 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
     order = sorted(range(len(out)), key=lambda i: out[i]["s"])
     for a, b in zip(order, order[1:]):
         if (a in touched or b in touched) and 0 < out[b]["s"] - out[a]["e"] <= 0.6:
-            out[a]["e"] = out[b]["s"]
+            # never past the end of a's own segment: its middle would leave the segment and build_ass drops it
+            # (a word replayed in two segments, e.g. the cold open, is held to the earliest of their ends)
+            ends = [e_ for s_, e_, _o in segments
+                    if out[a]["s"] >= s_ - 0.02 and (out[a]["s"] + out[a]["e"]) / 2 <= e_]
+            out[a]["e"] = min([out[b]["s"]] + ends)
     return out, moved
 
 
