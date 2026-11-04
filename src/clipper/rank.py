@@ -65,6 +65,7 @@ Hard rules:
   (Sends per reach is one of the strongest ranking signals on Reels; a clip nobody would send is a 6 at most.) Mild jokes, food reviews,
   casual banter and inside jokes are 5-6 at most. Loud genuine reactions, fails, shocking reveals, wins/losses
   with stakes, and chaos involving other people score higher.
+  Prefer moments whose stakes (money, risk, conflict, nostalgia, rankings) a stranger finds interesting without any lore, and write the hook so it makes sense without knowing the streamer or the game.
 - If nothing qualifies, return [] and nothing else. Returning [] is a correct answer for a boring stream.
 
 Return ONLY a JSON array:
