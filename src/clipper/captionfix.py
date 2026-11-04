@@ -6,7 +6,7 @@ start disagrees by more than RETIME_MIN are moved to the heard start.
 """
 from __future__ import annotations
 
-from .syncmeter import pair
+from .syncmeter import _norm, pair
 
 RETIME_MIN = 0.20   # s: smaller differences are the forced aligner's normal noise, left alone
 MAX_MOVED_DUR = 0.45  # s: a moved word's length is capped so its midpoint stays inside its segment
@@ -23,6 +23,24 @@ def output_occurrences(words: list[dict], segments: list[tuple[float, float, flo
     return sorted(occ, key=lambda o: o[2])
 
 
+def pair_with_leftovers(cap: list[tuple[str, float]], heard: list[tuple[str, float]]) -> list[tuple[int, int]]:
+    """pair() plus a second pass: a caption word the sequence match skipped (typically a one-letter word like "a"
+    next to a changed neighbour) is linked to the nearest unused heard word with the same text within RETIME_MAX."""
+    pairs = list(pair(cap, heard))
+    used_c, used_h = {c for c, _ in pairs}, {h for _, h in pairs}
+    for ci, (w, t) in enumerate(cap):
+        if ci in used_c:
+            continue
+        cands = [(abs(t - ht), hj) for hj, (hw, ht) in enumerate(heard)
+                 if hj not in used_h and _norm(hw) == _norm(w) and abs(t - ht) <= RETIME_MAX]
+        if cands:
+            hj = min(cands)[1]
+            pairs.append((ci, hj))
+            used_c.add(ci)
+            used_h.add(hj)
+    return sorted(pairs)
+
+
 def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
                  heard: list[tuple[str, float]], bias: float = 0.0) -> tuple[list[dict], list[str]]:
     """words: caption words (source time); heard: whisper (text, output start) of the finished audio.
@@ -34,7 +52,7 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
     cap = [(words[i]["w"], t) for i, _k, t in occ]
     cur = {(i, k): [words[i]["s"], words[i]["e"]] for i, k, _t in occ}  # (word, segment) -> new [s, e]
     moved, touched = [], set()
-    for ci, hj in pair(cap, heard):
+    for ci, hj in pair_with_leftovers(cap, heard):
         i, k, t_cap = occ[ci]
         diff = t_cap - heard[hj][1]
         if RETIME_MIN < abs(diff) <= RETIME_MAX:

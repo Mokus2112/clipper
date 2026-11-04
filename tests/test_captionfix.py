@@ -74,3 +74,20 @@ def test_cold_open_replay_is_retimed_per_occurrence():
     assert abs(a["ov"][1][0] - (59.1 - (10.1 - 9.6) + 0.0)) < 1e-6
     assert abs(a["ov"][0][0] - 59.1) < 1e-6  # cold open occurrence untouched
     assert moved and moved[0].startswith("a@10.10")
+
+
+def test_one_letter_word_skipped_by_the_sequence_match_is_retimed():
+    # alliance cotra c2: caption "A" lit at 11.20, spoken at 10.82; the neighbour changed, so SequenceMatcher skipped it
+    segs = [(0.0, 20.0, 0.0)]
+    words = [w("proposes", 9.8, 10.39), w("a", 11.20, 11.33), w("completely", 11.33, 11.74), w("way", 12.38, 12.85)]
+    heard = [("proposes", 9.84), (" a", 10.82), ("complete", 11.36), ("way", 12.4)]
+    out, moved = retime_words(words, segs, heard)
+    assert abs(out[1]["s"] - 10.82) < 0.01 and any(m.startswith("a@") for m in moved)
+
+
+def test_leftover_pass_never_pairs_beyond_the_mismatch_window():
+    segs = [(0.0, 20.0, 0.0)]
+    words = [w("a", 5.0, 5.1), w("x", 6.0, 6.2)]
+    heard = [("a", 8.0), ("y", 6.0)]
+    out, moved = retime_words(words, segs, heard)
+    assert out[0]["s"] == 5.0 and moved == []

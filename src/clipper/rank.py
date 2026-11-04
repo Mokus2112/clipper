@@ -38,6 +38,8 @@ Hard rules:
 - payoff_quote: the payoff as a short complete phrase or sentence (3-10 words), copied EXACTLY from the
   transcript, inside the clip. It must be understandable as the first thing a viewer hears.
   No strong profanity (f-word, s-word...) in the payoff_quote: it plays in the first seconds.
+  The clip must END ON A NATURAL CLOSURE: the answer, conclusion or punchline is complete. Never end on a question
+  whose answer is cut off, or on a half-made argument; extend the end to the speaker's closing sentence instead.
   The quotes decide the cut; the numbers are only a hint. A clip whose quotes are not in the transcript is dropped.
 - hook: on-screen text, 3-5 words and at most {hook_max} characters (spaces included; a hard limit, longer
   hooks are rejected), shown in one line over the cold open. It must create tension or a question that only
