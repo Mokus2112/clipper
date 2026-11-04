@@ -59,3 +59,18 @@ def test_held_word_stays_inside_its_own_segment():
     out, moved = retime_words(words, segs, [("necessary", 0.70), ("and", 1.25)])
     assert moved and out[1]["s"] > 11.3
     assert out[0]["e"] <= 11.0 and (out[0]["s"] + out[0]["e"]) / 2 <= 11.0
+
+
+def test_cold_open_replay_is_retimed_per_occurrence():
+    # alliance-secure-ai 000937 c1: "a completely universal way" is the cold open AND replayed in the main
+    # segment. The same word entry has two output times; each occurrence must follow its own heard time
+    # (the main "A" captioned 380 ms late left a caption gap under speech).
+    segs = [(59.0, 60.0, 0.0), (50.0, 70.0, 1.0)]
+    words = [w("a", 59.1, 59.3), w("completely", 59.3, 59.8)]
+    # cold open: a heard 0.10 (caption 0.10 -> fine), completely 0.30. Main: a at 1.0+9.1=10.1 heard 9.6.
+    heard = [("a", 0.10), ("completely", 0.30), ("a", 9.6), ("completely", 10.35)]
+    out, moved = retime_words(words, segs, heard)
+    a = out[0]
+    assert abs(a["ov"][1][0] - (59.1 - (10.1 - 9.6) + 0.0)) < 1e-6
+    assert abs(a["ov"][0][0] - 59.1) < 1e-6  # cold open occurrence untouched
+    assert moved and moved[0].startswith("a@10.10")

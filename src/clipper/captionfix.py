@@ -13,34 +13,33 @@ MAX_MOVED_DUR = 0.45  # s: a moved word's length is capped so its midpoint stays
 RETIME_MAX = 1.00   # s: a larger difference is a mismatched word, not a timing error
 
 
-def output_times(words: list[dict], segments: list[tuple[float, float, float]]) -> dict[int, tuple[float, int]]:
-    """word index -> (output time, segment index) for words build_ass would caption (same inclusion rule).
-    A word that falls into two segments is left out (retiming it would move both)."""
-    found: dict[int, list[tuple[float, int]]] = {}
-    for k, (seg_s, seg_e, off) in enumerate(segments):
-        for i, w in enumerate(words):
-            if w["s"] >= seg_s - 0.02 and (w["s"] + w["e"]) / 2 <= seg_e:
-                found.setdefault(i, []).append((w["s"] - seg_s + off, k))
-    return {i: v[0] for i, v in found.items() if len(v) == 1}
+def output_occurrences(words: list[dict], segments: list[tuple[float, float, float]]) -> list[tuple[int, int, float]]:
+    """(word index, segment index, output time) for every caption occurrence build_ass would draw (same inclusion
+    rule), sorted by output time. A word replayed in two segments (cold open + main) has one occurrence per segment."""
+    occ = [(i, k, w["s"] - seg_s + off)
+           for k, (seg_s, seg_e, off) in enumerate(segments)
+           for i, w in enumerate(words)
+           if w["s"] >= seg_s - 0.02 and (w["s"] + w["e"]) / 2 <= seg_e]
+    return sorted(occ, key=lambda o: o[2])
 
 
 def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
                  heard: list[tuple[str, float]], bias: float = 0.0) -> tuple[list[dict], list[str]]:
     """words: caption words (source time); heard: whisper (text, output start) of the finished audio.
     bias: build_ass later shifts every word earlier by sync_shift, so a moved word is placed at heard + bias.
-    Returns the words with grossly misplaced starts moved to the heard start, and a log line per moved word."""
-    times = output_times(words, segments)
-    idx = sorted(times)
-    cap = [(words[i]["w"], times[i][0]) for i in idx]
-    out = [dict(w) for w in words]
-    moved = []
+    Returns the words with grossly misplaced starts moved to the heard start, and a log line per moved word.
+    Each occurrence is timed on its own: a word replayed in two segments gets a per-segment override
+    w["ov"] = {segment index: (s, e)} that build_ass uses for that segment (its base s/e stay the source time)."""
+    occ = output_occurrences(words, segments)
+    cap = [(words[i]["w"], t) for i, _k, t in occ]
+    cur = {(i, k): [words[i]["s"], words[i]["e"]] for i, k, _t in occ}  # (word, segment) -> new [s, e]
+    moved, touched = [], set()
     for ci, hj in pair(cap, heard):
-        t_cap, t_heard = cap[ci][1], heard[hj][1]
-        diff = t_cap - t_heard
+        i, k, t_cap = occ[ci]
+        diff = t_cap - heard[hj][1]
         if RETIME_MIN < abs(diff) <= RETIME_MAX:
-            i = idx[ci]
-            w = out[i]
-            seg_s, seg_e = segments[times[i][1]][:2]
+            seg_s, seg_e = segments[k][:2]
+            w = words[i]
             new_s = w["s"] - (diff - bias)
             # build_ass captions a word only if it starts inside its segment and its middle is inside too. A word
             # moved out of its segment (whisper heard it in the neighbouring segment's output span) would
@@ -48,20 +47,26 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
             if not seg_s - 0.02 <= new_s <= seg_e:
                 continue
             dur = min(w["e"] - w["s"], MAX_MOVED_DUR)  # aligned durations after fillers are inflated (incident: 1.1 s)
-            w["s"] = new_s
-            w["e"] = min(new_s + dur, seg_e)
-            moved.append(f"{w['w']}@{t_cap:.2f}->{t_heard:.2f}")
+            cur[(i, k)] = [new_s, min(new_s + dur, seg_e)]
+            touched.add((i, k))
+            moved.append(f"{w['w']}@{t_cap:.2f}->{heard[hj][1]:.2f}")
     # A moved word keeps its (shifted) duration, but the heard word often lasts longer: hold it until the next
-    # word starts when the gap is small, or the caption leaves a hole under speech (QA caption gap).
-    touched = {idx[ci] for ci, _ in pair(cap, heard) if RETIME_MIN < abs(cap[ci][1] - heard[_][1]) <= RETIME_MAX}
-    order = sorted(range(len(out)), key=lambda i: out[i]["s"])
-    for a, b in zip(order, order[1:]):
-        if (a in touched or b in touched) and 0 < out[b]["s"] - out[a]["e"] <= 0.6:
-            # never past the end of a's own segment: its middle would leave the segment and build_ass drops it
-            # (a word replayed in two segments, e.g. the cold open, is held to the earliest of their ends)
-            ends = [e_ for s_, e_, _o in segments
-                    if out[a]["s"] >= s_ - 0.02 and (out[a]["s"] + out[a]["e"]) / 2 <= e_]
-            out[a]["e"] = min([out[b]["s"]] + ends)
+    # word of the same segment starts when the gap is small, or the caption leaves a hole under speech.
+    for k, (seg_s, seg_e, _o) in enumerate(segments):
+        order = sorted((key for key in cur if key[1] == k), key=lambda key: cur[key][0])
+        for a, b in zip(order, order[1:]):
+            if (a in touched or b in touched) and 0 < cur[b][0] - cur[a][1] <= 0.6:
+                # never past the end of the segment: the middle would leave it and build_ass drops the word
+                cur[a][1] = min(cur[b][0], seg_e)
+    out = [dict(w) for w in words]
+    for i, w in enumerate(out):
+        ks = [k for (j, k) in cur if j == i]
+        if len(ks) == 1:
+            (k,) = ks
+            if (i, k) in touched or cur[(i, k)][1] != w["e"]:
+                w["s"], w["e"] = cur[(i, k)]
+        elif ks and any((i, k) in touched or cur[(i, k)][1] != w["e"] for k in ks):
+            w["ov"] = {k: tuple(cur[(i, k)]) for k in ks}
     return out, moved
 
 
