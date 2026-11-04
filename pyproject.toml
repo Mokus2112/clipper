@@ -9,6 +9,7 @@ dependencies = [
     "fonttools>=4.68.0",
     "google-api-python-client>=2.201.0",
     "google-auth-oauthlib>=1.5.0",
+    "mlx-whisper>=0.4.2; sys_platform == 'darwin'",
     "numpy>=2.5.4",
     "opencv-python-headless>=4.10,<5",
     "pyyaml>=6.0.3",

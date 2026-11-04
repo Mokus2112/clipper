@@ -26,6 +26,43 @@ def model(cfg: dict, name: str):
     return WhisperModel(name, device="cpu", compute_type="int8", cpu_threads=cfg["whisper"]["threads"])
 
 
+class MlxClipModel:
+    """mlx-whisper large-v3-turbo on Apple Silicon: same word dicts as the faster-whisper path, ~3x faster
+    than medium on CPU (work/mlxw: 4-5 s vs 13-18 s per clip window). No VAD filter in mlx-whisper."""
+
+    def __init__(self, repo: str):
+        import mlx_whisper
+        self.repo, self.mw = repo, mlx_whisper
+
+    def words(self, audio: np.ndarray, lo: float, *, prompt: str, language, vad: bool = True, condition: bool = True) -> list[dict]:
+        r = self.mw.transcribe(audio, path_or_hf_repo=self.repo, word_timestamps=True, initial_prompt=prompt,
+                               language=language, condition_on_previous_text=condition, verbose=None)
+        return [{"w": w["word"].strip(), "s": round(lo + w["start"], 2), "e": round(lo + w["end"], 2)}
+                for seg in r["segments"] for w in seg.get("words", []) if w["word"].strip()]
+
+
+class FasterClipModel:
+    def __init__(self, m):
+        self.m = m
+
+    def words(self, audio: np.ndarray, lo: float, *, prompt: str, language, vad: bool = True, condition: bool = True) -> list[dict]:
+        segments, _ = self.m.transcribe(audio, word_timestamps=True, vad_filter=vad, initial_prompt=prompt,
+                                        language=language, condition_on_previous_text=condition)
+        return [{"w": w.word.strip(), "s": round(lo + w.start, 2), "e": round(lo + w.end, 2)}
+                for seg in segments for w in (seg.words or []) if w.word.strip()]
+
+
+def clip_model(cfg: dict):
+    """Word-level model for the clip pass: whisper.clip_backend mlx (falls back to faster-whisper if mlx-whisper is missing)."""
+    wc = cfg["whisper"]
+    if wc.get("clip_backend", "faster") == "mlx":
+        try:
+            return MlxClipModel(wc.get("mlx_model", "mlx-community/whisper-large-v3-turbo"))
+        except ImportError:
+            log("WARN mlx-whisper not installed, falling back to faster-whisper " + wc["clip_model"])
+    return FasterClipModel(model(cfg, wc["clip_model"]))
+
+
 def transcribe_full(cfg: dict, job_id: str) -> list[dict]:
     """Segment-level transcript of the whole VOD, processed in chunks to keep memory flat. Resumable."""
     wc = cfg["whisper"]
@@ -65,7 +102,7 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
         raise SystemExit("run rank first")
     language = read_json(jd / "transcript.json", {}).get("language")
 
-    m = model(cfg, wc["clip_model"])
+    m = clip_model(cfg)
     from .anchors import find_quote
     from .common import find_source
     src = find_source(cfg, read_json(jd / "job.json")["source"]) or {}
@@ -77,23 +114,14 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
         hi = max(clip["end"], clip.get("payoff_end") or clip["end"]) + 5
         # The prompt nudges Whisper to keep spoken fillers ("like", "you know", "it's") verbatim;
         # captions that skip words people can hear look machine-made.
-        segments, _ = m.transcribe(load_audio(video, lo, hi - lo), word_timestamps=True, vad_filter=True,
-                                   initial_prompt=f"{source_names}Um, so, like, you know, I mean, it's, uh, yeah. Verbatim.",
-                                   language=language)
-        words = [
-            {"w": w.word.strip(), "s": round(lo + w.start, 2), "e": round(lo + w.end, 2)}
-            for seg in segments for w in (seg.words or []) if w.word.strip()
-        ]
+        prompt = f"{source_names}Um, so, like, you know, I mean, it's, uh, yeah. Verbatim."
+        words = m.words(load_audio(video, lo, hi - lo), lo, prompt=prompt, language=language)
         quotes0 = clip.get("quotes") or {}
         if quotes0.get("end_quote") and not find_quote(words, quotes0["end_quote"], near=clip["end"]):
             # Whisper sometimes drops the last words of a window (crosstalk, VAD, profanity):
             # re-transcribe the tail without VAD and splice the missing words in.
             t0 = max(lo, clip["end"] - 10)
-            seg2, _ = m.transcribe(load_audio(video, t0, hi - t0), word_timestamps=True, vad_filter=False,
-                                   condition_on_previous_text=False, language=language,
-                                   initial_prompt=f"{source_names}Um, so, like, you know, I mean, it's, uh, yeah. Verbatim.")
-            tail = [{"w": w.word.strip(), "s": round(t0 + w.start, 2), "e": round(t0 + w.end, 2)}
-                    for sg in seg2 for w in (sg.words or []) if w.word.strip()]
+            tail = m.words(load_audio(video, t0, hi - t0), t0, prompt=prompt, language=language, vad=False, condition=False)
             if tail:
                 cut = tail[0]["s"] - 0.05
                 words = [w for w in words if w["e"] <= cut] + tail
