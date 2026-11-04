@@ -52,6 +52,21 @@ def download(cfg: dict, jd: Path, url: str) -> None:
             log("live chat download timed out, continuing without chat")
 
 
+MIN_SECTION_SEC = 150  # shorter windows cut the speaker's answer in half: the ranker sees no payoff and returns []
+
+
+def check_section(section: str | None) -> None:
+    """Refuse sections under MIN_SECTION_SEC (Codee #880). End the window on a natural close, not mid-answer."""
+    if not section or os.environ.get("CLIPPER_ALLOW_SHORT_SECTION"):
+        return
+    from .detect import hms
+    start, end = section.split("-")
+    length = hms(end) - hms(start)
+    if length < MIN_SECTION_SEC:
+        raise SystemExit(f"section {section} is {length}s, minimum {MIN_SECTION_SEC}s; extend it so the answer "
+                         f"ends naturally (CLIPPER_ALLOW_SHORT_SECTION=1 to override)")
+
+
 def cut_section(jd: Path, section: str) -> None:
     """Keep only START-END (HH:MM:SS) of the source, stream copy (cuts snap to keyframes)."""
     start, end = section.split("-")
@@ -84,6 +99,7 @@ def used_video(cfg: dict, source_name: str, url: str) -> str | None:
 
 def fetch(cfg: dict, source_name: str, url_or_path: str, section: str | None = None) -> str:
     source = find_source(cfg, source_name)
+    check_section(section)
     job_id = f"{source_name}-{datetime.now():%Y%m%d-%H%M%S}"
     prev = None if os.environ.get("CLIPPER_ALLOW_REUSE") else used_video(cfg, source_name, url_or_path)
     if prev:
