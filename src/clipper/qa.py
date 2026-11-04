@@ -338,7 +338,7 @@ def check_caption_words(video: Path, ass: Path) -> list[str]:
         if not any((h in alts or h == n or h.startswith(n[:4]) or close(h)) and abs(t - s0) <= 1.5 for h, t in heard):
             missing.append(f"{w}@{s0:.2f}")
     missing = sorted(set(missing))
-    return [f"caption words not heard in the audio: {', '.join(missing[:8])}"] if len(missing) >= 2 else []
+    return [f"caption words not heard in the audio: {', '.join(missing[:8])}"] if missing else []
 
 
 def _repeats(seq: list[tuple[str, float]]) -> list[tuple[int, int]]:
