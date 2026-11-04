@@ -286,15 +286,23 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
     picks, raw = [], []
     for i, part in enumerate(parts):
         log(f"ranking part {i + 1}/{len(parts)} with claude...")
-        out = ask_claude(cfg, PROMPT.format(
+        try:
+            out = ask_claude(cfg, PROMPT.format(
             streamer=source["streamer"], n=rc["clips_per_vod"],
             notes=(f"Campaign rules (hard): {source['rank_notes']}\n" if source.get("rank_notes") else ""), min_sec=cc["min_sec"],
             max_sec=cc["max_sec"] - cfg["render"]["cold_open_max"], transcript="\n".join(part),
             title_max=title_budget(source), hook_max=hook_budget(source),
-        ), jd)
+            ), jd)
+        except Exception as e:  # noqa: BLE001
+            (jd / "rank_error.txt").write_text(f"part {i + 1}/{len(parts)}: {e!r}\n")
+            raise
         raw.append(out)
-        picks += extract_json(out)
-    (jd / "rank_raw.txt").write_text("\n\n".join(raw))
+        (jd / "rank_raw.txt").write_text("\n\n".join(raw))  # saved before parsing, so a bad reply is never lost
+        try:
+            picks += extract_json(out)
+        except Exception as e:  # noqa: BLE001
+            (jd / "rank_error.txt").write_text(f"part {i + 1}/{len(parts)}: {e!r}\n")
+            raise
     shorten_hooks(cfg, [p for p in picks if p.get("score", 0) >= min_score], source, jd)
 
     from .anchors import find_quote, segment_words
