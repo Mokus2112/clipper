@@ -49,3 +49,15 @@ def test_clip_model_falls_back_without_mlx(monkeypatch):
 def test_clip_model_default_is_faster(monkeypatch):
     monkeypatch.setattr(T, "model", lambda cfg, name: ("faster", name))
     assert isinstance(T.clip_model({"whisper": {"clip_model": "medium"}}), T.FasterClipModel)
+
+
+def test_keep_speech_drops_words_outside_vad_spans():
+    words = [{"w": "ghost", "s": 100.0, "e": 100.4}, {"w": "real", "s": 105.0, "e": 105.4}, {"w": "edge", "s": 107.5, "e": 107.8}]
+    kept = T.keep_speech(words, 100.0, [(4.8, 7.4)])
+    assert [w["w"] for w in kept] == ["real", "edge"]  # 'edge' starts 0.1 s after the span, inside VAD_PAD
+
+
+def test_mlx_skips_transcription_when_vad_finds_no_speech(monkeypatch):
+    monkeypatch.setitem(sys.modules, "mlx_whisper", types.SimpleNamespace(transcribe=lambda *a, **k: 1 / 0))
+    monkeypatch.setattr(T, "speech_spans", lambda a: [])
+    assert T.MlxClipModel("r").words(np.zeros(16000, np.float32), 0.0, prompt="p", language="en") == []

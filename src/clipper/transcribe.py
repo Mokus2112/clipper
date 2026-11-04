@@ -26,6 +26,21 @@ def model(cfg: dict, name: str):
     return WhisperModel(name, device="cpu", compute_type="int8", cpu_threads=cfg["whisper"]["threads"])
 
 
+VAD_PAD = 0.15  # s: a word is kept when it overlaps a detected speech span widened by this much
+
+
+def speech_spans(audio: np.ndarray) -> list[tuple[float, float]]:
+    """Speech spans (s) from the silero VAD bundled with faster-whisper: the same filter its vad_filter applies."""
+    from faster_whisper.vad import VadOptions, get_speech_timestamps
+    return [(c["start"] / SR, c["end"] / SR) for c in get_speech_timestamps(audio, VadOptions())]
+
+
+def keep_speech(words: list[dict], lo: float, spans: list[tuple[float, float]]) -> list[dict]:
+    """Drop words outside every speech span (mlx-whisper has no VAD: it invents "Thank you." on noise, echoes the
+    prompt on silence, work/mlxw hallucination test on the CoD trailer)."""
+    return [w for w in words if any(w["s"] < lo + b + VAD_PAD and w["e"] > lo + a - VAD_PAD for a, b in spans)]
+
+
 class MlxClipModel:
     """mlx-whisper large-v3-turbo on Apple Silicon: same word dicts as the faster-whisper path, ~3x faster
     than medium on CPU (work/mlxw: 4-5 s vs 13-18 s per clip window). No VAD filter in mlx-whisper."""
@@ -35,10 +50,14 @@ class MlxClipModel:
         self.repo, self.mw = repo, mlx_whisper
 
     def words(self, audio: np.ndarray, lo: float, *, prompt: str, language, vad: bool = True, condition: bool = True) -> list[dict]:
+        spans = speech_spans(audio) if vad else None
+        if spans is not None and not spans:
+            return []
         r = self.mw.transcribe(audio, path_or_hf_repo=self.repo, word_timestamps=True, initial_prompt=prompt,
                                language=language, condition_on_previous_text=condition, verbose=None)
-        return [{"w": w["word"].strip(), "s": round(lo + w["start"], 2), "e": round(lo + w["end"], 2)}
-                for seg in r["segments"] for w in seg.get("words", []) if w["word"].strip()]
+        words = [{"w": w["word"].strip(), "s": round(lo + w["start"], 2), "e": round(lo + w["end"], 2)}
+                 for seg in r["segments"] for w in seg.get("words", []) if w["word"].strip()]
+        return keep_speech(words, lo, spans) if spans is not None else words
 
 
 class FasterClipModel:

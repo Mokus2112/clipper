@@ -27,6 +27,8 @@ detect:
 whisper:
   full_model: base    # fast pass over the whole VOD, used to find stories
   clip_model: medium  # word timestamps for the selected clips (captions); small was ~0.2 s off mid-speech
+  clip_backend: mlx   # mlx = mlx-whisper large-v3-turbo (Apple Silicon, ~3x faster); faster = faster-whisper clip_model on CPU
+  mlx_model: mlx-community/whisper-large-v3-turbo
   chunk_sec: 600      # full pass works in chunks to keep memory flat
   language: null      # null = auto-detect
   threads: 4
