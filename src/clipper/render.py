@@ -836,6 +836,14 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
             runs = silence_runs(audio_fn, s0 - 0.3, s0 + 0.02)  # 0.8 s pulled in a stutter + dead air
             if runs:
                 s0 = runs[-1][1] - 0.03
+            elif level_db(audio_fn, s0, 0.03) > SILENCE_DB:
+                # Connected speech, no 60 ms pause: mlx word starts run up to 0.2 s late (Cotra c1 cut
+                # inside "so" at -20 dB). Take the deepest dip just before, if it is a real one.
+                # Scan the same 30 ms window qa.check_segment_starts measures.
+                cand = [(level_db(audio_fn, t_, 0.03), -t_) for t_ in (s0 - 0.35 + 0.005 * k for k in range(70))]
+                lvl, nt = min(cand)
+                if lvl <= -40.0:
+                    s0 = -nt
         if level_db(audio_fn, e1 - 0.03, 0.03) > -30.0:
             runs = silence_runs(audio_fn, e1 - 0.02, e1 + 0.8)
             if runs:
