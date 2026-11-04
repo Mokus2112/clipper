@@ -321,7 +321,13 @@ def check_caption_words(video: Path, ass: Path) -> list[str]:
     norm = lambda w: re.sub(r"[^a-z0-9']", "", w.lower().replace("*", ""))  # noqa: E731
     model = WhisperModel("small", device="cpu", compute_type="int8")
     segs, _ = model.transcribe(load_audio(video, 0.0, _duration(video)), language="en", word_timestamps=True)
-    heard = [(norm(w.word), w.start) for s in segs for w in (s.words or [])]
+    heard: list[tuple[str, float]] = []
+    for s in segs:
+        for w in (s.words or []):
+            if heard and re.match(r"\s*[,.]\d", w.word) and heard[-1][0][-1:].isdigit():
+                heard[-1] = (heard[-1][0] + norm(w.word), heard[-1][1])  # whisper splits '1,200' into '1' + ',200'
+            else:
+                heard.append((norm(w.word), w.start))
     missing = []
     for s0, _e, w in _highlights(ass):
         if "-" in w:  # whisper hears 'ex-wife' as 'ex', 'wife': check the longest part

@@ -39,3 +39,8 @@ def test_single_invented_word_fails(monkeypatch):
 def test_all_words_heard_passes(monkeypatch):
     heard = [("the", 0.0), ("senator", 0.5), ("said", 1.0)]
     assert _run(monkeypatch, heard, [("senator", 0.5)]) == []
+
+
+def test_split_number_is_not_missing(monkeypatch):
+    heard = [("agents", 0.0), ("1", 0.5), (",200", 0.56), ("sent", 1.0), ("70", 1.5), (",000", 1.9)]
+    assert _run(monkeypatch, heard, [("1,200", 0.5), ("70,000", 1.5)]) == []
