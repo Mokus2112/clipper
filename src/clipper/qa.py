@@ -238,7 +238,7 @@ def check_caption_sync_words(video: Path, ass: Path) -> list[str]:
     out = []
     if bad:
         shown = ", ".join(f"{r.word}@{r.cap:.2f} {r.d_whisper:+.0f}ms" for r in bad[:6])
-        out.append(f"caption sync (whisper+energy): {len(bad)} words off by more than 150 ms: {shown} [{summary(rows)}]")
+        out.append(f"caption sync (whisper+energy): {len(bad)} words off (150 ms with an energy onset, 300 ms whisper-only): {shown} [{summary(rows)}]")
     # unmatched = caption words whisper did not find in the audio: sync unknown, counted apart from late/early
     un = [r for r in rows if r.unmatched]
     if un and unmatched_alarming(rows):

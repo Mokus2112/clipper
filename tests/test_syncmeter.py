@@ -117,3 +117,16 @@ def test_qa_stays_silent_below_unmatched_threshold(monkeypatch):
     from clipper import qa
     monkeypatch.setattr(sm, "measure", lambda v, a: _rows("o" * 30 + "u"))
     assert qa.check_caption_sync_words(None, None) == []
+
+
+def test_whisper_only_word_uses_noise_floor_threshold():
+    from clipper.syncmeter import Row
+    # no energy onset: 230 ms is inside whisper's own +-200 ms jitter, not a slip (Codee #880)
+    assert Row("SEPARATE", 3.73, 3.96, None).verdict == "ok"
+    assert Row("SEPARATE", 3.73, 4.10, None).verdict == "early"
+
+
+def test_energy_confirmed_word_keeps_150ms():
+    from clipper.syncmeter import Row
+    assert Row("X", 5.00, 5.20, 5.19).verdict == "early"
+    assert Row("X", 5.00, 5.10, 5.09).verdict == "ok"

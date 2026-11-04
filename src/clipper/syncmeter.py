@@ -19,7 +19,11 @@ from pathlib import Path
 import numpy as np
 
 UNCERTAIN_MS = 150
-FAIL_MS = 150
+FAIL_MS = 150  # whisper AND an energy onset agree: precise, 150 ms is a real slip
+# Whisper alone (no pause-preceded onset to confirm it) is only good to ~+-200 ms: hand check on Cotra 002210
+# c1/c2 against energy onsets gave mean error 100-130 ms, p90 ~220 ms for BOTH the retime and whisper on the
+# finished audio (Codee #880). Two such measures differ by >150 ms by chance, so QA judged its own noise.
+WHISPER_ONLY_FAIL_MS = 300
 CAP_NEAR_MS = 200  # an energy onset this close to the caption backs it over whisper
 HOP = 0.01
 QUIET_STEPS = 8  # 80 ms of quiet before an energy onset counts
@@ -65,7 +69,8 @@ class Row:
             return "unmatched"
         if self.uncertain:
             return "uncertain"
-        return "late" if self.d_whisper > FAIL_MS else "early" if self.d_whisper < -FAIL_MS else "ok"
+        limit = FAIL_MS if self.energy is not None else WHISPER_ONLY_FAIL_MS
+        return "late" if self.d_whisper > limit else "early" if self.d_whisper < -limit else "ok"
 
 
 def envelope_db(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
@@ -183,7 +188,7 @@ def summary(rows: list[Row]) -> str:
     med = float(np.median([r.d_whisper for r in sure]))
     bad = [r for r in sure if r.verdict != "ok"]
     return (f"{len(rows)} words, {len(sure)} certain, {len(rows) - len(sure) - un} uncertain, {un} unmatched; median {med:+.0f} ms; "
-            f"{len(bad)} beyond +-{FAIL_MS} ms")
+            f"{len(bad)} off (>{FAIL_MS} ms with onset, >{WHISPER_ONLY_FAIL_MS} ms whisper-only)")
 
 
 UNMATCHED_RATIO = 0.10
