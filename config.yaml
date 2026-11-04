@@ -92,12 +92,12 @@ captions:
   uppercase: true
   color: "&H00FFFFFF"      # ASS BGR: white
   highlight: "&H0000E0FF"  # ASS BGR: brand yellow #FFE000
-  y_center: 1260           # caption baseline in center layout (keeps clear of Shorts UI)
+  y_center: 1180           # caption baseline in center layout (safe zone: text bottom <= y1250)
   y_split: 820             # caption position in split layout (just under the seam)
   y_shots: 1000            # shots layout fallback
   y_shots_duo: 1000        # shots layout, stacked duo: just under the seam
-  y_shots_face: 1410       # shots layout, close-up: below the face, above the Shorts UI
-  y_fit: 1400              # fit layout: below the centred frame, above the 420 px bottom UI zone (TikTok/Reels)
+  y_shots_face: 1195       # shots layout, close-up: below the chin (render.FACE_BOTTOM_MAX 1070), text bottom <= y1250
+  y_fit: 1180              # fit layout: lower part of the centred frame, text bottom <= y1250 (Shorts/Reels UI below)
   pop: 1.0                 # 1.0 = no scale pop (Badi 2026-11-01: 1.12 looked jittery); word highlight colour stays
 
 hook:
@@ -110,7 +110,7 @@ hook:
   size: 112           # shrinks to fit the safe width ...
   min_size: 80        # ... never below this (rank.py keeps hooks <= 28 chars / 5 words)
   pad: 18
-  y: 334
+  y: 355
   y_duo: 312          # stacked duo: top of the box at the safe zone edge, off the speaker's head
   y_face: 1250        # close-up fallback without face geometry; normally above the hair or under the chin
 
@@ -263,7 +263,7 @@ sources:
     tags: [aisafety, ai, airisk]
     credit: "Source: public interview footage from the Alliance for Secure AI content bank"
     required_text: ""
-    logo: {file: data/alliance/logo1.png, width: 315, y: 1420, caption_y: 1290}
+    logo: {file: data/alliance/logo1.png, width: 315, y: 1420, caption_y: 1200}
     rank_notes: >-
       Topic must be AI risks/dangers. Use words like could, might, maybe where the speaker hedges; never state
       predictions as facts. Start on the quoted hook line, end on a complete sentence. 10-40 seconds.

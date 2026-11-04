@@ -13,7 +13,8 @@ import numpy as np
 from .common import ROOT, path_of, tool
 
 # Strictest safe zone over YouTube Shorts, TikTok and Instagram Reels (1080x1920).
-TOP, BOTTOM, RIGHT = 220, 1500, 920
+TOP, BOTTOM, RIGHT = 220, 1500, 920   # faces
+TEXT_BOTTOM, TEXT_RIGHT = 1250, 860    # captions and hook (card H): above the Shorts/Reels UI, left of the buttons
 SPEAKER_FACE_W = 0.10      # faces wider than 10% of the frame are speakers
 END_SILENCE_DB = -30.0     # last 50 ms of a segment must be at most this loud (no cut mid-word)
 MIN_SHOT_FRAMES = 3        # a shot shorter than this is a flash
@@ -80,7 +81,7 @@ def check_safe_zone(cdir: Path, fonts: Path) -> list[str]:
     dur = _duration(video)
     bad = []
     for t, (x0, y0, x1, y1) in text_boxes(cdir, dur, fonts):
-        if y0 < TOP or y1 > BOTTOM or x1 > RIGHT:
+        if y0 < TOP or y1 > TEXT_BOTTOM or x1 > TEXT_RIGHT:
             bad.append(f"safe zone: text at {t:.1f}s box x{x0}-{x1} y{y0}-{y1}")
     for t, (x0, y0, x1, y1) in face_boxes(video, dur):
         if y0 < TOP or y1 > BOTTOM or x1 > RIGHT:
@@ -584,7 +585,7 @@ def plan_caption_shift(cdir: Path, fonts: Path) -> list[list[float]]:
         top, bot = min(bx[1] for _, bx in inside), max(bx[3] for _, bx in inside)
         fallback = None
         for dy in (-260, -400, -520, 240, 360, 120, 60):
-            if top + dy < TOP or bot + dy > BOTTOM:
+            if top + dy < TOP or bot + dy > TEXT_BOTTOM:
                 continue
             left = burned_text_conflicts(cdir, fonts, dy_at=lambda t, a=a, b=b, dy=dy: dy if a <= t <= b else 0,
                                            captions_only=True)

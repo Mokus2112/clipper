@@ -430,7 +430,7 @@ def duo_panels(shot: dict, info: dict, aspect: float) -> tuple | None:
     return l, r
 
 
-FACE_BOTTOM_MAX = 1340   # close-up: chin (YuNet box bottom) must end above the captions (y1380)
+FACE_BOTTOM_MAX = 1070   # close-up: chin (YuNet box bottom + beard margin) must end above the captions (captions.y_shots_face 1195, top ~1140)
 FACE_TOP_MIN = 300       # ... and the forehead stay below the top UI zone
 
 
@@ -516,7 +516,7 @@ def hook_window_fit(cfg: dict, info: dict, plan: list[dict], off: float, seg_len
     over the blurred copy leaves the top clear. A shot running well past the window is split there,
     so the close-up comes back as a punch-in.
     """
-    cap_top = cfg["captions"].get("y_shots_face", 1410) - 60
+    cap_top = cfg["captions"].get("y_shots_face", 1195) - 60
     fps, out = info["fps"], []
     for sh in plan:
         a = off + sh["f0"] / fps
@@ -991,8 +991,8 @@ def censor(word: str) -> str:
 
 
 # Strictest safe zone over YouTube Shorts, TikTok and Instagram Reels (1080x1920): keep text and
-# faces out of the top ~220 px, the bottom ~420 px and the right ~160 px (action buttons).
-SAFE_LEFT, SAFE_RIGHT_X = 90, 920
+# faces out of the top ~220 px, the bottom ~420 px and the right ~220 px (action buttons; text stops at x860).
+SAFE_LEFT, SAFE_RIGHT_X = 90, 860
 HOOK_FLOOR = 80  # absolute minimum hook size (legacy long hooks only)
 SAFE_TOP = 220
 FACE_X = 475                              # close-up face centre x (left of the button column)
@@ -1211,7 +1211,7 @@ def hook_events(cfg: dict, clip: dict, segments, shot_spans, fonts_dir, cap_font
     ch = _cap_h(font, size)
     bh = ch + 2 * pad
     x0, x1 = SAFE_LEFT, SAFE_LEFT + HOOK_BAR + pad + min(tw, avail) + pad
-    cap_top = cc.get("y_shots_face", 1410) - _cap_h(cap_font, cc["size"]) / 2 - cc["outline"]
+    cap_top = cc.get("y_shots_face", 1195) - _cap_h(cap_font, cc["size"]) / 2 - cc["outline"]
 
     yc = hc["y"]  # ONE fixed position for the whole hook window, in every layout (reviewer #274: no jumping)
     y0, y1 = yc - bh / 2, yc + bh / 2
