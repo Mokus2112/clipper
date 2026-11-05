@@ -146,6 +146,34 @@ def format_transcript(segments: list[dict], spikes: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def fix_hashtags(tags: list[str], source: dict) -> list[str]:
+    """Snap near-miss campaign tags (LLM typos like 'allitforsecureai') to the canonical spelling.
+
+    Canonical = streamer name squashed to one word, plus the campaign's own tags and required #tags.
+    A tag that is not identical but at least 85% similar to a canonical one is replaced; the
+    streamer tag is guaranteed to be present and first.
+    """
+    import difflib
+    import re
+    canon = [re.sub(r"[^a-z0-9]", "", str(source.get("streamer", "")).lower())]
+    canon += [str(t).lower() for t in source.get("tags", [])]
+    canon += [t.lower() for t in re.findall(r"#(\w+)", str(source.get("required_text", "")))]
+    canon = [c for c in dict.fromkeys(canon) if len(c) >= 5]
+    out: list[str] = []
+    for t in tags:
+        low = t.lower()
+        if low not in canon:
+            best = max(canon, key=lambda c: difflib.SequenceMatcher(None, low, c).ratio(), default=None)
+            if best and difflib.SequenceMatcher(None, low, best).ratio() >= 0.85:
+                t = best
+        if t.lower() not in [o.lower() for o in out]:
+            out.append(t)
+    streamer = canon[0] if canon and len(canon[0]) >= 5 and " " in str(source.get("streamer", "")) else None
+    if streamer and streamer not in [o.lower() for o in out]:
+        out.insert(0, streamer)
+    return out
+
+
 def title_budget(source: dict, limit: int = 60) -> int:
     """Characters left for the model's title once the mandatory prefix ("Ad: Scape - ") is prepended."""
     prefix = source.get("title_prefix", "")
@@ -399,7 +427,7 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
             "added_value": p["added_value"].strip(),
             "story": p.get("story", ""),
             "caption": p.get("caption", p["title"]).strip(),
-            "hashtags": [h.strip().lstrip("#").replace(" ", "") for h in p.get("hashtags", []) if h.strip()][:5],
+            "hashtags": fix_hashtags([h.strip().lstrip("#").replace(" ", "") for h in p.get("hashtags", []) if h.strip()], source)[:5],
             "score": p["score"],
             "reason": p.get("reason", ""),
         })
