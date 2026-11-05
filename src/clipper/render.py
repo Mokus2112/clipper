@@ -1657,6 +1657,8 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         clip = {**clip, "cold_len": segments[0][1] - segments[0][0] if len(raw) > 1 else 0.0}
         layout, cx, cam, track = pick_layout(cfg, source, video, info, main[0], main[1])
         face_top = getattr(face_boxes, "last_top", None) if layout in ("center", "auto") else None
+        # chin bottom of the same main-range face_boxes() call; per-segment calls below overwrite last_bottom
+        face_bottom = getattr(face_boxes, "last_bottom", None) if layout in ("center", "auto") else None
         if track:
             log(f"  tracking: {len(track)} face samples")
         if source.get("identity") and layout in ("center", "auto"):
@@ -1792,7 +1794,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 chh = even(sh_ * (source.get("crop_h", 1.0)))
                 pad = max(int(source.get("top_pad", 0)), face_top_pad(face_top, sh_, chh, rc["height"]))
                 to_out = lambda f: pad + min(max(f * sh_ / chh, 0.0), 0.99) * (rc["height"] - pad)  # noqa: E731
-                fb = getattr(face_boxes, "last_bottom", None)
+                fb = face_bottom
                 plan = punch_plan(to_out(face_top), to_out(fb if fb is not None else face_top + 0.3), amp)
                 if plan is None:
                     log("  punch-in skipped: the face does not fit the safe band with a >= 1.06 zoom")

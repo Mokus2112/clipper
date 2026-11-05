@@ -65,3 +65,14 @@ def test_plan_moves_the_anchor_up_when_the_forehead_would_hit_the_top_zone():
 def test_plan_gives_up_when_the_face_is_too_tall_for_a_1_06_zoom():
     assert punch_plan(225, 1070) is None
     assert punch_plan(230, 1100) is None
+
+
+def test_punch_anchor_uses_the_main_range_face_bottom():
+    """face_boxes.last_bottom is overwritten by per-segment calls; the punch block must use the value read next to face_top."""
+    import inspect
+    from clipper import render as r
+    src = inspect.getsource(r.render)
+    top = src.index("face_top = getattr(face_boxes")
+    bottom = src.index('face_bottom = getattr(face_boxes, "last_bottom"')
+    assert 0 < bottom - top < 400  # read right next to face_top, before per-segment calls
+    assert src.count('getattr(face_boxes, "last_bottom"') == 1 and "fb = face_bottom" in src
