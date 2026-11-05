@@ -107,11 +107,12 @@ def energy_onset(env: np.ndarray, t: float, before: float = 0.45, after: float =
 def caption_words(ass: Path) -> list[tuple[str, float]]:
     """(word, highlight start); one word split over two Dialogue lines counts once."""
     out, prev = [], None
+    hl_re = highlight_re()  # config read once, not per caption line
     for line in ass.read_text().splitlines():
         if not line.startswith("Dialogue: 0,"):
             continue
         p = line.split(",", 9)
-        m = highlight_re().search(p[9])
+        m = hl_re.search(p[9])
         if not m:
             continue
         h, mi, s = p[1].split(":")

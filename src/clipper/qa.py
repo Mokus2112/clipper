@@ -215,10 +215,11 @@ def _highlights(ass: Path) -> list[tuple[float, float, str]]:
         h, m, s_ = t.split(":")
         return int(h) * 3600 + int(m) * 60 + float(s_)
     out = []
+    hl_re = highlight_re()  # config read once, not per caption line
     for line in ass.read_text().splitlines():
         if line.startswith("Dialogue: 0,"):
             p = line.split(",", 9)
-            m = highlight_re().search(p[9])
+            m = hl_re.search(p[9])
             out.append((secs(p[1]), secs(p[2]), m.group(1).strip() if m else ""))
     return out
 
@@ -425,11 +426,12 @@ def check_repeated_words(video: Path, ass: Path) -> list[str]:
     from .transcribe import load_audio
     norm = lambda w: re.sub(r"[^a-z0-9']", "", w.lower().replace("*", ""))  # noqa: E731
     cap, prev = [], None  # one word may span two Dialogue lines (position change): merge those
+    hl_re = highlight_re()  # config read once, not per caption line
     for line in ass.read_text().splitlines():
         if not line.startswith("Dialogue: 0,"):
             continue
         p = line.split(",", 9)
-        m = highlight_re().search(p[9])
+        m = hl_re.search(p[9])
         key = re.sub(r"\{\\pos[^}]*\}", "", p[9])  # same text and same highlighted word = same word
         h, mi, sec = p[1].split(":")
         s0 = int(h) * 3600 + int(mi) * 60 + float(sec)
