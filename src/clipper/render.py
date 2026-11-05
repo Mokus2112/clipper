@@ -100,6 +100,25 @@ def _ema_track(pts: list[tuple[float, float]], alpha: float) -> list[tuple[float
     return out
 
 
+def cap_pan_speed(track: list[tuple[float, int]], cw: int, out_w: int, fps: float,
+                  max_px_frame: float = 1.5, max_lag_frac: float = 0.25) -> list[tuple[float, int]]:
+    """Limit the crop pan speed to max_px_frame output px per frame (a fast pan over detail trips the
+    QA flash check). The cap is released when the crop would lag the target by more than
+    max_lag_frac of the crop width, so the face stays inside the frame."""
+    if len(track) < 2:
+        return track
+    step = max_px_frame * fps * cw / out_w  # source px per second
+    lag = cw * max_lag_frac
+    out = [track[0]]
+    for t, x in track[1:]:
+        px = out[-1][1]
+        dx = min(max(x - px, -step * (t - out[-1][0])), step * (t - out[-1][0]))
+        nx = px + dx
+        nx = min(max(nx, x - lag), x + lag)  # release: never trail the target by more than the lag
+        out.append((t, int(round(nx))))
+    return out
+
+
 def _track_crop_expr(track: list[tuple[float, int]], seg_start: float) -> str:
     """Build an ffmpeg eval expression for the linearly-interpolated crop x offset."""
     if not track:
@@ -260,6 +279,7 @@ def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam:
     if track and rc.get("track_face", False):
         smoothed = [(t, int(min(max(cxf * sw - cw * face_at, lo), hi)))
                     for t, cxf in _ema_track(track, rc.get("track_alpha", 0.15))]
+        smoothed = cap_pan_speed(smoothed, cw, W, rc.get("fps", 30), rc.get("pan_max_px_frame", 1.5))
         x_expr = _track_crop_expr(smoothed, seg_start)
     else:
         center = (cx if cx is not None else 0.5) * sw
