@@ -1601,11 +1601,12 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         # Segment audio comes from one sample-exact WAV: input seek on the video file loses audio on some sources.
         from .segaudio import extract_range
         seg_wav = cdir / "segments_audio.wav"
-        # shots layout: the WAV audio inputs hang ffmpeg's filter graph (solved-091333-c2, 15+ min at 100% CPU,
-        # pre-G code 3 min); that layout keeps the audio of the video input (input seek) until this is understood.
+        # The WAV is always extracted: caption retiming reads it in every layout. Only its use as an ffmpeg
+        # INPUT is layout dependent: on shots the WAV inputs hang the filter graph (solved-091333-c2, 15+ min at
+        # 100% CPU, pre-G code 3 min), so shots still renders with the audio of the video input.
         wav_audio = layout != "shots"
-        wav_t0 = extract_range(video, min(sg[0] for sg in segments), max(sg[1] for sg in segments), seg_wav) if wav_audio else 0.0
-        if wav_audio and clip.get("words") and cfg["captions"].get("retime_from_audio", True):
+        wav_t0 = extract_range(video, min(sg[0] for sg in segments), max(sg[1] for sg in segments), seg_wav)
+        if clip.get("words") and cfg["captions"].get("retime_from_audio", True):
             # Forced alignment can sit 0.3-0.6 s off after fillers: move grossly misplaced words to the heard start.
             try:
                 from .captionfix import heard_in_output, output_audio, repair_words, retime_words
