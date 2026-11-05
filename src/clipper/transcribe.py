@@ -1,5 +1,6 @@
 """Transcription: a fast full-VOD pass for story finding, and an accurate word-level pass for the chosen clips."""
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -111,6 +112,17 @@ def transcribe_full(cfg: dict, job_id: str) -> list[dict]:
     return state["segments"]
 
 
+def merge_number_fragments(words: list[dict]) -> list[dict]:
+    """Whisper splits "$20,000." into "$20" + ",000."; one caption token is what is said and shown."""
+    out: list[dict] = []
+    for w in words:
+        if out and re.match(r"^,\d", w["w"]) and re.search(r"\d$", out[-1]["w"]):
+            out[-1] = {**out[-1], "w": out[-1]["w"] + w["w"], "e": max(out[-1]["e"], w["e"])}
+        else:
+            out.append(w)
+    return out
+
+
 def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
     """Accurate word timestamps for each selected clip, then snap clip boundaries to word edges."""
     wc, cc = cfg["whisper"], cfg["clip"]
@@ -135,6 +147,7 @@ def transcribe_clips(cfg: dict, job_id: str) -> list[dict]:
         # captions that skip words people can hear look machine-made.
         prompt = f"{source_names}Um, so, like, you know, I mean, it's, uh, yeah. Verbatim."
         words = m.words(load_audio(video, lo, hi - lo), lo, prompt=prompt, language=language)
+        words = merge_number_fragments(words)
         quotes0 = clip.get("quotes") or {}
         if quotes0.get("end_quote") and not find_quote(words, quotes0["end_quote"], near=clip["end"]):
             # Whisper sometimes drops the last words of a window (crosstalk, VAD, profanity):
