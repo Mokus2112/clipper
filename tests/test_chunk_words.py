@@ -47,3 +47,12 @@ def test_short_last_chunk_takes_a_word_from_a_full_neighbour():
              w("it", 1.66, 1.78), w("all.", 1.78, 1.89)]
     chunks = chunk_words(words, 3, 1.4)
     assert [[x["w"] for x in c] for c in chunks] == [["I", "would"], ["kill", "it", "all."]]
+
+
+def test_rebalance_counts_display_span_not_word_span():
+    # Chip Roy c1 re-render: "I WOULD" has a 0.18 s word span but stays on screen until KILL starts (0.30 s), so the
+    # flash "IT ALL." (zero-length "all.") must still borrow KILL.
+    words = [w("I", 1.00, 1.10), w("would", 1.10, 1.18), w("kill", 1.30, 1.50),
+             w("it", 1.50, 1.60), w("all.", 1.60, 1.60)]
+    chunks = chunk_words(words, 3, 1.4)
+    assert [[x["w"] for x in c] for c in chunks] == [["I", "would"], ["kill", "it", "all."]]

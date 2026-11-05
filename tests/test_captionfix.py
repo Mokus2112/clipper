@@ -272,3 +272,21 @@ def test_collapsed_pair_is_spread_before_the_later_word():
     occ = [(0, 0, 9.36), (1, 0, 9.76), (2, 0, 9.80)]
     _spread_collapsed(cur, occ)
     assert abs(cur[(1, 0)][0] - 9.64) < 1e-6 and cur[(2, 0)][0] == 9.80
+
+
+def test_duplicate_transcript_word_without_heard_counterpart_is_dropped():
+    # chip-roy c1: transcript "And," + "and" (0.4 s apart), the audio has one "and" then "I would"
+    segs = [(0.0, 40.0, 0.0)]
+    words = [w("kill", 8.0, 8.3), w("And,", 8.84, 9.1), w("and", 9.26, 9.6), w("I", 9.6, 9.7), w("would", 9.7, 9.9)]
+    heard = [("kill", 8.0), ("and", 8.9), ("I", 9.36), ("would", 9.64)]
+    out, log = repair_words(words, segs, heard, None)
+    assert [x["w"] for x in out] == ["kill", "and", "I", "would"]
+    assert any(m.startswith("dup") for m in log)
+
+
+def test_repeated_word_that_is_heard_twice_is_kept():
+    segs = [(0.0, 40.0, 0.0)]
+    words = [w("very", 1.0, 1.3), w("very", 1.4, 1.7), w("good", 1.8, 2.0)]
+    heard = [("very", 1.0), ("very", 1.4), ("good", 1.8)]
+    out, _log = repair_words(words, segs, heard, None)
+    assert [x["w"] for x in out] == ["very", "very", "good"]

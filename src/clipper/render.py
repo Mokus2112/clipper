@@ -658,7 +658,7 @@ def chunk_words(words: list[dict], max_words: int, max_sec: float,
             continue
         moved, rest = prev[-1:], prev[:-1]
         if (len(ch) + 1 <= max_words and ch[0]["s"] - moved[0]["e"] <= 0.6
-                and dur(rest) >= MIN_CAPTION_SEC and fits(moved + ch)):
+                and moved[0]["s"] - rest[0]["s"] >= MIN_CAPTION_SEC and fits(moved + ch)):
             chunks[i - 1], chunks[i] = rest, moved + ch
     return chunks
 

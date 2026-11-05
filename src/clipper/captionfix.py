@@ -380,6 +380,22 @@ def repair_words(words: list[dict], segments: list[tuple[float, float, float]],
                 log.append(f"going to->gonna@{t:.2f}")
                 break
     words = [w for i, w in enumerate(words) if i not in drop]
+    # a transcript word that repeats its neighbour and has no heard counterpart is a transcript duplicate ("And," +
+    # "and" in chip-roy c1 8.8-9.6 s: the audio has one "and", the caption lit I 0.2 s late)
+    occ = output_occurrences(words, segments)
+    cap = [(words[i]["w"], t) for i, _k, t in occ]
+    paired_c = {c for c, _h in pair_with_leftovers(cap, heard)}
+    drop = set()
+    for ci in range(1, len(cap)):
+        i, _k, t = occ[ci]
+        pi, _pk, pt = occ[ci - 1]
+        if (i == pi + 1 and i not in drop and pi not in drop and (ci in paired_c) != (ci - 1 in paired_c)
+                and _norm(cap[ci][0]) == _norm(cap[ci - 1][0]) and len(occ_count(occ, i)) == 1
+                and len(occ_count(occ, pi)) == 1 and 0 <= t - pt <= 0.45 and not words[pi]["w"].rstrip().endswith((".", "!", "?"))):
+            gone = pi if ci in paired_c else i
+            drop.add(gone)
+            log.append(f"dup {words[gone]['w']}@{(pt if gone == pi else t):.2f}")
+    words = [w for i, w in enumerate(words) if i not in drop]
     if env is None:
         return words, log
     # runs of unpaired heard words in a caption gap
