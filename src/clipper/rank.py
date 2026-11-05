@@ -28,6 +28,9 @@ Hard rules:
   It is shown first as a cold open before the clip plays from the setup.
 - The clip must START at the beginning of a sentence and END at the end of a sentence (never mid-sentence,
   never on a dangling "and"/"so"/"I mean"). The first sentence must make sense to a stranger on its own.
+- Standalone test (yt-shorts): all three must hold. (1) It opens on a complete thought that needs no earlier
+  minute of the video. (2) It has a turn: a claim, then something that complicates or proves it. (3) It ends on
+  a line, not a trail-off. A candidate failing one is not a Short; score it below the minimum.
 - start_quote: the first 5-8 words of the clip, copied EXACTLY from the transcript (same words, same order).
   It must be the beginning of a full sentence: the transcript text right before it ends with . ? or !
 - end_quote: the last 5-8 words of the clip, copied EXACTLY from the transcript, ending a sentence.
@@ -184,6 +187,24 @@ def shorten_hooks(cfg: dict, picks: list[dict], source: dict, cwd) -> None:
             picks[i]["hook"] = h.strip()
 
 
+def _log_hook_scores(picks: list[dict]) -> None:
+    """Advisory only: hookscore.py (yt-script skill) was built for spoken hooks, so a low score on a 3-5 word
+    on-screen hook is a reason to look again, never a gate."""
+    import sys
+    from pathlib import Path
+    script = Path(__file__).resolve().parents[4] / ".claude/skills/yt-script/hookscore.py"
+    if not script.exists():
+        return
+    for p in picks:
+        try:
+            r = subprocess.run([sys.executable, "-I", str(script), "--json", "--hook", p.get("hook", "")],
+                               capture_output=True, text=True, timeout=20)
+            d = json.loads(r.stdout)[0]
+            log(f"hookscore {d['verdict']} ({d['band']}) for {p['hook']!r}")
+        except Exception as e:
+            log(f"hookscore skipped: {e}")
+
+
 def _hook_with_mention(hook: str, name: str) -> str:
     """Campaigns that require the creator's name in the on-screen text get it in the hook."""
     if name and name.lower() not in hook.lower():
@@ -306,6 +327,7 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
             (jd / "rank_error.txt").write_text(f"part {i + 1}/{len(parts)}: {e!r}\n")
             raise
     shorten_hooks(cfg, [p for p in picks if p.get("score", 0) >= min_score], source, jd)
+    _log_hook_scores([p for p in picks if p.get("score", 0) >= min_score])
 
     from .anchors import find_quote, segment_words
     seg_words = segment_words(segments)
