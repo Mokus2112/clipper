@@ -69,6 +69,7 @@ def face_boxes(video: Path, start: float, end: float, timed: bool = False,
     cap.release()
     face_boxes.last_identity = {"locked": locked, "other_faces": others, "samples": samples}
     face_boxes.last_top = min((b[1] for b in boxes), default=None)  # highest face top seen (frame fraction)
+    face_boxes.last_bottom = max((b[1] + b[3] * 1.04 for b in boxes), default=None)  # lowest chin seen, beard margin (qa.FACE_BEARD_MARGIN)
     return (timed_pts, samples) if timed else (boxes, samples)
 
 
@@ -791,6 +792,71 @@ def adaptive_fade_in(audio_fn, s: float, default: float = AUDIO_FADE_IN, floor: 
     return default
 
 
+PUNCH_AMP, PUNCH_PERIOD, PUNCH_RAMP = 0.08, 3.0, 0.12   # zoom 1.0 <-> 1.08, a step at least every 3 s, 0.12 s ramp
+PUNCH_FIRST, PUNCH_SNAP, PUNCH_MIN_GAP = 2.6, 0.8, 2.0   # s: first step after the hook, snap window to a cut, min spacing
+
+
+def punch_schedule(total: float, boundaries: list[float], period: float = PUNCH_PERIOD, first: float = PUNCH_FIRST,
+                   snap: float = PUNCH_SNAP, min_gap: float = PUNCH_MIN_GAP) -> list[float]:
+    """Output times of the zoom steps: one every `period` s at most, the first at `first`.
+
+    A step is pulled earlier onto a segment boundary (a cut already hides the jump) when one lies within
+    `snap` s before it and keeps at least `min_gap` s from the previous step. Never later: the spacing
+    must not exceed `period`. Steps closer than 0.6 s to the clip end are dropped.
+    """
+    steps, t = [], first
+    while t < total - 0.6:
+        cand = [b for b in boundaries if t - snap <= b <= t and b - (steps[-1] if steps else 0.0) >= min_gap]
+        t_ = max(cand) if cand else t
+        steps.append(round(t_, 3))
+        t = t_ + period
+    return steps
+
+
+def punch_expr(steps: list[float], amp: float = PUNCH_AMP, ramp: float = PUNCH_RAMP, var: str = "t") -> str:
+    """ffmpeg expression z(t) in seconds: zoom alternates 1+amp / 1 at every step (linear ramp)."""
+    if not steps:
+        return "1"
+    terms = "".join(f"{'+' if k % 2 == 0 else '-'}min(max(({var}-{ts:.3f})/{ramp},0),1)" for k, ts in enumerate(steps))
+    return f"(1+{amp}*({terms.lstrip('+')}))"
+
+
+def punch_plan(face_top: float, face_bottom: float, amp: float = PUNCH_AMP, top_min: float = 220.0,
+               bottom_max: float | None = None, min_amp: float = 0.06) -> tuple[float, float] | None:
+    """(anchor y, amplitude) of a punch-in that keeps the face inside [top_min, bottom_max] (output px).
+
+    A zoom about y=A moves the face top to A+(top-A)z and the chin to A+(bottom-A)z. Both must stay inside
+    the safe band (forehead below the top UI zone, chin above the caption). The anchor is the chin, so the
+    chin (the edge the caption sits under) stays put and the forehead grows upward into free space; when
+    that does not fit, the nearest anchor that does; the amplitude drops towards `min_amp` when the
+    face is too tall for the full zoom. None: no punch-in fits, the layout stays static.
+    """
+    bm = FACE_BOTTOM_MAX if bottom_max is None else bottom_max
+    for a in (amp, 0.07, min_amp):
+        if a < min_amp - 1e-9 or a > amp + 1e-9:
+            continue
+        z = 1 + a
+        lo, hi = (face_bottom * z - bm) / a, (face_top * z - top_min) / a
+        if lo <= hi + 1e-9:
+            return min(max(face_bottom, lo), hi), a
+    return None
+
+
+def punch_filter(steps: list[float], fps: float, anchor: tuple[float, float], W: int, H: int,
+                 amp: float = PUNCH_AMP, ramp: float = PUNCH_RAMP) -> str:
+    """Zoom the finished picture about `anchor` (output px): the anchor stays put, the rest grows away from it.
+
+    perspective resamples with sub-pixel precision (same trick as push_in), so there is no jitter.
+    """
+    z = punch_expr(steps, amp, ramp, var=f"(in/{fps:.5f})")
+    ax, ay = anchor
+    d = f"(1-1/{z})"
+    x0, x1 = f"{ax:.1f}*{d}", f"W-{W - ax:.1f}*{d}"
+    y0, y2 = f"{ay:.1f}*{d}", f"H-{H - ay:.1f}*{d}"
+    return (f"perspective=x0='{x0}':y0='{y0}':x1='{x1}':y1='{y0}':x2='{x0}':y2='{y2}'"
+            f":x3='{x1}':y3='{y2}':interpolation=cubic:eval=frame")
+
+
 def audio_chain(idx: int, fi: float, fo: float, dur: float, a_dur: float) -> str:
     """Per-segment audio filter: fades at both cut edges, padded/trimmed to the exact output length."""
     return (f"[{idx}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
@@ -1122,6 +1188,7 @@ CAP_X = (SAFE_LEFT + SAFE_RIGHT_X) // 2   # text centre, shifted left of the fra
 
 
 TOP_BLUR: dict[str, list[list[float]]] = {}  # clip id -> [t0, t1, x0, y0, x1, y1] blurred patches (source text in the top strip)
+PUNCH_OFF: set[str] = set()   # clips re-rendered without punch-in after it put the zoom on a face (QA)
 CAP_SHIFT: dict[str, list[list[float]]] = {}  # clip id -> [t0, t1, dy] caption moves (burned-in source text)
 
 
@@ -1710,7 +1777,32 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             concat += f"[l{i}][a{i}]"
         # loudnorm alone let true peaks reach -0.7 dBFS; limiter at -3 dBFS leaves room for AAC overshoot (~1.5 dB).
         audio = ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=192000,alimiter=limit=0.708:level=false:attack=1:release=50,aresample=48000" if rc["loudnorm"] else ""
-        graph.append(f"{concat}concat=n={len(segments)}:v=1:a=1[cv][ca0]")
+        punch = (clip.get("punch_in", rc.get("punch_in", {}).get("enabled", False)) and layout in ("center", "fit")
+                 and clip["id"] not in PUNCH_OFF)
+        graph.append(f"{concat}concat=n={len(segments)}:v=1:a=1[{'cv0' if punch else 'cv'}][ca0]")
+        if punch:
+            pc = rc.get("punch_in", {})
+            total_out = sum(n_ / fps_ for n_, fps_ in ((n, info["fps"]) for n in nframes))
+            bounds = [off_ for _s, _e, off_ in segments[1:]]
+            steps = punch_schedule(total_out, bounds, pc.get("period", PUNCH_PERIOD))
+            sw_, sh_ = info["width"], info["height"]
+            ax = FACE_X if (source.get("campaign_url") or source.get("montage")) else rc["width"] / 2
+            ay, amp = rc["height"] * 0.35, pc.get("amp", PUNCH_AMP)
+            if layout == "center" and face_top is not None:
+                chh = even(sh_ * (source.get("crop_h", 1.0)))
+                pad = max(int(source.get("top_pad", 0)), face_top_pad(face_top, sh_, chh, rc["height"]))
+                to_out = lambda f: pad + min(max(f * sh_ / chh, 0.0), 0.99) * (rc["height"] - pad)  # noqa: E731
+                fb = getattr(face_boxes, "last_bottom", None)
+                plan = punch_plan(to_out(face_top), to_out(fb if fb is not None else face_top + 0.3), amp)
+                if plan is None:
+                    log("  punch-in skipped: the face does not fit the safe band with a >= 1.06 zoom")
+                    steps = []
+                else:
+                    ay, amp = plan
+            elif layout == "fit":
+                ay = rc["height"] / 2
+            graph.append(f"[cv0]{punch_filter(steps, float(rc['fps']), (ax, ay), rc['width'], rc['height'], amp)}[cv]" if steps else "[cv0]null[cv]")
+            log(f"  punch-in steps at {steps} (anchor y {ay:.0f}, zoom {1 + amp:.2f})")
         from .memes import pick_effects, meme_filter_chain
         meme_fx = pick_effects(cfg, clip)
         W, H = rc["width"], rc["height"]
@@ -1803,6 +1895,21 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                            [(s_, off_) for s_, e_, off_ in segments],
                            montage=bool(source.get("montage")),
                            logo=((logo_box(Path(lg["file"]), int(lg.get("width", 340))), int(lg.get("y", 1360))) if lg.get("file") else None))
+        if punch and any("on the speaker's face" in p_ for p_ in problems):
+            # The zoom is only planned for the main face; a second face (or a caption/hook box) can still end up
+            # under the zoomed picture. A clip that fails because of it is rendered again without the punch-in.
+            PUNCH_OFF.add(clip["id"])
+            log(f"  punch-in put the picture on a face ({sum('on the speaker' in p_ for p_ in problems)} QA hits), rendering {clip['id']} again without it")
+            prev = os.environ.get("CLIPPER_ONLY")
+            os.environ["CLIPPER_ONLY"] = clip["id"]
+            try:
+                outputs += render(cfg, job_id)
+            finally:
+                if prev is None:
+                    os.environ.pop("CLIPPER_ONLY", None)
+                else:
+                    os.environ["CLIPPER_ONLY"] = prev
+            continue
         if problems:
             # Known defect types never reach the reviewer: the clip stays out of the queue.
             log(f"  QA FAILED {clip['id']} ({len(problems)}), see qa.txt:")
