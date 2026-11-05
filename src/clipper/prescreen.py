@@ -9,6 +9,7 @@ text in the top strip, digital silence. Reasons go to <job>/prescreen.json; thre
 import re
 import subprocess
 
+import cv2
 import numpy as np
 
 from .common import find_source, job_dir, log, read_json, source_video, tool, write_json
@@ -20,9 +21,20 @@ DEFAULTS = {
     "max_multi_face_ratio": 0.4, # share of samples with 2+ faces (no identity sources)
     "max_cuts_per_40s": 10,
     "max_top_text_ratio": 0.15,  # share of samples with OCR words in the top strip
+    "max_top_edge_ratio": 0.15,  # share of samples with a text-free graphic banner (edges) in the top strip
     "max_silence_ratio": 0.25,   # share of 50 ms windows below silence_db
     "silence_db": -70.0,
 }
+
+
+def top_band_has_edges(frame, strip_px: int = 130, out_h: int = 1920, thr: float = 0.003) -> bool:
+    """Same test as qa.dense_top_hits, on a source frame scaled to the output height: edges in the top
+    strip mean a broadcast banner or title graphic (flat footage has none). Fox/CNN banners carry no OCR text."""
+    h = frame.shape[0]
+    sc = out_h / h
+    band = cv2.cvtColor(frame[:max(int(h * strip_px / out_h), 8)], cv2.COLOR_BGR2GRAY)
+    band = cv2.resize(band, None, fx=sc, fy=sc)
+    return cv2.Canny(band, 60, 150).mean() / 255 >= thr
 
 
 def decide(m: dict, thr: dict, has_identity: bool, tracks_faces: bool = True) -> list[str]:
@@ -36,6 +48,8 @@ def decide(m: dict, thr: dict, has_identity: bool, tracks_faces: bool = True) ->
         why.append(f"{m['cuts_per_40s']:.1f} cuts per 40 s")
     if m["top_text_ratio"] > thr["max_top_text_ratio"]:
         why.append(f"top-strip text in {m['top_text_ratio']:.0%} of samples")
+    if m.get("top_edge_ratio", 0.0) > thr["max_top_edge_ratio"]:
+        why.append(f"burned-in banner/graphic in the top strip in {m['top_edge_ratio']:.0%} of samples")
     if m["silence_ratio"] > thr["max_silence_ratio"]:
         why.append(f"digital silence {m['silence_ratio']:.0%}")
     return why
@@ -66,7 +80,7 @@ def measure(video, start: float, end: float, identity: str | None, fps: float, s
             raise RuntimeError(f"identity '{identity}' has no reference")
     cap = cv2.VideoCapture(str(video))
     detector = None
-    n = locked = multi = top = 0
+    n = locked = multi = top = edge = 0
     t = start
     while t < end:
         cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
@@ -84,6 +98,7 @@ def measure(video, start: float, end: float, identity: str | None, fps: float, s
                 detector = cv2.FaceDetectorYN.create(
                     str(ROOT / "models" / "face_detection_yunet_2023mar.onnx"), "", (640, 360), 0.7, 0.3, 50)
             multi += len(all_faces(cap, detector, t - 1.0 / fps)) >= 2
+        edge += top_band_has_edges(fr)
         band = cv2.cvtColor(fr[:max(int(fr.shape[0] * 0.08), 24)], cv2.COLOR_BGR2GRAY)
         if cv2.Canny(band, 100, 200).mean() / 255 >= 0.004:
             g = cv2.resize(band, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
@@ -103,6 +118,7 @@ def measure(video, start: float, end: float, identity: str | None, fps: float, s
         "multi_face_ratio": multi / n,
         "cuts_per_40s": len(cuts) * 40.0 / max(dur, 1.0),
         "top_text_ratio": top / n,
+        "top_edge_ratio": float(edge) / n,
         "silence_ratio": silence_ratio(video, start, dur, silence_db),
     }
 
