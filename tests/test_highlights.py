@@ -18,3 +18,11 @@ def test_nothing_to_spare_still_merges():
 def test_long_words_untouched():
     evs = [[0.0, 0.3, 0], [0.3, 0.6, 1], [0.6, 0.9, 2]]
     assert balance_highlights(evs, MIN_WORD_SHOW) == evs
+
+
+def test_short_last_word_does_not_light_up_far_before_its_own_start():
+    # AND@1.09: 72 ms last word used to pull 61 ms back from SWITCH and lit in silence
+    evs = [[0.67, 1.1485, 0], [1.1485, 1.22, 1]]
+    out = balance_highlights(evs, MIN_WORD_SHOW, max_early=0.04)
+    assert [e[2] for e in out] == [0, 1]
+    assert out[1][0] >= 1.1485 - 0.04 - 1e-9 and out[1][1] == 1.22
