@@ -181,6 +181,34 @@ def check_segment_starts(audio_fn, source_starts: list[tuple[float, float]]) -> 
 FILLERS = {"like", "so", "and", "um", "uh", "yeah", "the", "a", "i", "it's", "you", "know", "just", "oh"}
 
 
+LEGACY_HIGHLIGHT = "&H0000E0FF"   # brand yellow, the highlight colour before captions.highlight was read from config
+_hl_cache: dict[str, re.Pattern] = {}
+
+
+def highlight_re(color: str | None = None) -> re.Pattern:
+    """Pattern for the active-word tag `\\c<highlight>}word` of a caption line.
+
+    `color` is an ASS colour (&HAABBGGRR, any case, optional leading 00 alpha, optional trailing &);
+    None reads captions.highlight from config.yaml and falls back to the legacy yellow when it is
+    missing or not a colour. The sentence colour never matches: only the highlight tag does.
+    """
+    if color is None:
+        try:
+            from .common import load_config
+            color = load_config().get("captions", {}).get("highlight")
+        except Exception:  # noqa: BLE001 - QA must run without a readable config
+            color = None
+    hexes = re.sub(r"(?i)^&?h|&$", "", (color or "").strip())
+    if not re.fullmatch(r"(?i)[0-9a-f]{6}|[0-9a-f]{8}", hexes):
+        hexes = LEGACY_HIGHLIGHT[2:]
+    rgb, alpha = hexes[-6:], hexes[:-6] if len(hexes) == 8 else "00"
+    key = (alpha + rgb).upper()
+    if key not in _hl_cache:
+        a = "(?:00)?" if alpha == "00" else re.escape(alpha)
+        _hl_cache[key] = re.compile(r"\\c&H" + a + re.escape(rgb) + r"&?\}([^{]+)", re.I)
+    return _hl_cache[key]
+
+
 def _highlights(ass: Path) -> list[tuple[float, float, str]]:
     """(start, end, highlighted word) of every caption line."""
     def secs(t: str) -> float:
@@ -190,7 +218,7 @@ def _highlights(ass: Path) -> list[tuple[float, float, str]]:
     for line in ass.read_text().splitlines():
         if line.startswith("Dialogue: 0,"):
             p = line.split(",", 9)
-            m = re.search(r"\\c&H0000E0FF\}([^{]+)", p[9])
+            m = highlight_re().search(p[9])
             out.append((secs(p[1]), secs(p[2]), m.group(1).strip() if m else ""))
     return out
 
@@ -401,7 +429,7 @@ def check_repeated_words(video: Path, ass: Path) -> list[str]:
         if not line.startswith("Dialogue: 0,"):
             continue
         p = line.split(",", 9)
-        m = re.search(r"\\c&H0000E0FF\}([^{]+)", p[9])
+        m = highlight_re().search(p[9])
         key = re.sub(r"\{\\pos[^}]*\}", "", p[9])  # same text and same highlighted word = same word
         h, mi, sec = p[1].split(":")
         s0 = int(h) * 3600 + int(mi) * 60 + float(sec)

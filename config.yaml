@@ -92,8 +92,8 @@ captions:
   max_words: 3
   max_chunk_sec: 1.4
   uppercase: true
-  color: "&H00FFFFFF"      # ASS BGR: white
-  highlight: "&H0000E0FF"  # ASS BGR: brand yellow #FFE000
+  color: "&H00C8C8C8"      # ASS BGR: sentence in light grey #C8C8C8 (clip v2)
+  highlight: "&H00FFFFFF"  # ASS BGR: active word white (qa.highlight_re reads this; legacy yellow was &H0000E0FF)
   y_center: 1180           # caption baseline in center layout (safe zone: text bottom <= y1250)
   y_split: 820             # caption position in split layout (just under the seam)
   y_shots: 1000            # shots layout fallback

@@ -18,6 +18,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .qa import highlight_re
+
 UNCERTAIN_MS = 150
 FAIL_MS = 250  # whisper AND an energy onset agree: a word this far off is a slip (Codee #1310: was 150)
 # Whisper alone (no pause-preceded onset to confirm it) is only good to ~+-200 ms: hand check on Cotra 002210
@@ -109,7 +111,7 @@ def caption_words(ass: Path) -> list[tuple[str, float]]:
         if not line.startswith("Dialogue: 0,"):
             continue
         p = line.split(",", 9)
-        m = re.search(r"\\c&H0000E0FF\}([^{]+)", p[9])
+        m = highlight_re().search(p[9])
         if not m:
             continue
         h, mi, s = p[1].split(":")

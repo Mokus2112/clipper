@@ -1,5 +1,6 @@
 """The fade-in must finish before the first word starts, not cut into it (alliance c1: 'I' lost its onset)."""
 import numpy as np
+import pytest
 
 from clipper.render import AUDIO_FADE_IN, FADE_IN_MIN, adaptive_fade_in
 
@@ -36,3 +37,13 @@ def test_fade_never_below_minimum_never_above_default():
 def test_no_audio_falls_back_to_default():
     assert adaptive_fade_in(None, 0.0) == AUDIO_FADE_IN
 
+
+
+def test_onset_exactly_on_a_10_ms_window_edge():
+    assert adaptive_fade_in(audio_with_onset(0.01), 0.0) == pytest.approx(0.01)
+    assert adaptive_fade_in(audio_with_onset(0.04), 0.0) == pytest.approx(AUDIO_FADE_IN)
+
+
+def test_audio_shorter_than_one_window_gives_the_default():
+    for n in (0, 1, 100, 159):
+        assert adaptive_fade_in(lambda t0, d, n=n: np.zeros(n, dtype=np.float32), 0.0) == AUDIO_FADE_IN
