@@ -1370,6 +1370,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
     ]
     if hc["enabled"] and clip.get("hook"):
         lines += hook_events(cfg, clip, segments, shot_spans, fonts_dir, cap_font)
+    lines += badge_events(cfg, clip, segments, fonts_dir, cap_font)
 
     max_w = cc.get("max_width", SAFE_RIGHT_X - SAFE_LEFT - 70)
     lead = cc.get("onset_lead", 0.03)
@@ -1492,6 +1493,73 @@ def hook_events(cfg: dict, clip: dict, segments, shot_spans, fonts_dir, cap_font
     if shown < 1.0:
         log(f"  WARN hook shown only {shown:.2f} s (no head-free slot on the close-ups)")
     return out
+
+
+BADGE_SECONDS = 2.0     # s a keyword badge stays on screen
+BADGE_SIZE = 64         # px, shrinks to fit the safe width
+BADGE_AFTER_HOOK = 0.2  # s: the badge never shares the hook's slot with the hook
+
+
+def out_time(segments, t: float) -> float | None:
+    """Output time of source time t, or None when t lies in no segment."""
+    for s_, e_, off in segments:
+        if s_ - 0.02 <= t < e_:
+            return off + max(t - s_, 0.0)
+    return None
+
+
+def badge_events(cfg: dict, clip: dict, segments, fonts_dir, cap_font=None) -> list[str]:
+    """One keyword badge (clip["badge"]): an accent-coloured chip with dark text, in the hook's slot, after the hook.
+
+    clip["badge"] = {"text": "Clearest warning shot", "at": "clearest"} or {"text": ..., "t0": source seconds};
+    optional "t1" (source seconds, default t0 + BADGE_SECONDS), "y" (output px, default hook.y). `at` is a caption word
+    (first match inside the clip). At most one badge, never over the hook, always inside the safe zone
+    (x <= SAFE_RIGHT_X): the text shrinks to fit. QA treats it like the hook (face overlap, safe zone).
+    """
+    b = clip.get("badge")
+    if not b or not b.get("text"):
+        return []
+    t0 = b.get("t0")
+    if t0 is None and b.get("at"):
+        key = re.sub(r"[^a-z0-9']", "", str(b["at"]).lower())
+        t0 = next((w["s"] for w in clip.get("words", []) if re.sub(r"[^a-z0-9']", "", w["w"].lower()) == key
+                   and clip.get("start", 0) - 0.05 <= w["s"] <= clip.get("end", 1e9)), None)
+    if t0 is None:
+        log(f"  WARN badge {b['text']!r}: word {b.get('at')!r} not found, no badge")
+        return []
+    a = out_time(segments, t0)
+    if a is None:
+        log(f"  WARN badge {b['text']!r}: {t0:.2f}s is outside the clip, no badge")
+        return []
+    hc, cc = cfg["hook"], cfg["captions"]
+    bc = cfg.get("badge", {})
+    cold = clip.get("cold_len", segments[0][1] - segments[0][0] if len(segments) > 1 else 0.0)
+    a = max(a, cold + hc["seconds"] + BADGE_AFTER_HOOK)  # after the hook window
+    total = sum(e_ - s_ for s_, e_, _ in segments)
+    t1 = out_time(segments, b["t1"]) if b.get("t1") is not None else None
+    z = min(t1 if t1 is not None else a + BADGE_SECONDS, total)
+    if z - a < 0.4:
+        log(f"  WARN badge {b['text']!r}: only {z - a:.2f} s of room, no badge")
+        return []
+    font = _fonts(fonts_dir, hc.get("font", cc["font"]))
+    text = ass_escape(str(b["text"])).upper()
+    pad = bc.get("pad", 16)
+    avail = SAFE_RIGHT_X - SAFE_LEFT - 2 * pad
+    size = bc.get("size", BADGE_SIZE)
+    while size > 36 and _width(font, text, size, hc.get("spacing", 0)) > avail:
+        size -= 2
+    tw = min(_width(font, text, size, hc.get("spacing", 0)), avail)
+    bh = _cap_h(font, size) + 2 * pad
+    yc = b.get("y", bc.get("y", hc["y"]))
+    x0, x1, y0, y1 = SAFE_LEFT, SAFE_LEFT + 2 * pad + tw, yc - bh / 2, yc + bh / 2
+    t = f"{ass_time(a)},{ass_time(z)}"
+    fad = "\\fad(120,120)"
+    rect = f"m {x0:.0f} {y0:.0f} l {x1:.0f} {y0:.0f} l {x1:.0f} {y1:.0f} l {x0:.0f} {y1:.0f}"
+    return [
+        f"Dialogue: 1,{t},HookBox,,0,0,0,,{{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\c{bc.get('fill', hc['box'])}{fad}}}{rect}",
+        f"Dialogue: 3,{t},HookText,,0,0,0,,{{\\an4\\pos({x0 + pad},{yc - _cap_off(font, size):.0f})\\fs{size}"
+        f"\\c{bc.get('color', hc['fill'])}{fad}}}{text}",
+    ]
 
 
 def music_ratio(jd: Path, start: float, end: float, threshold: float) -> float | None:
