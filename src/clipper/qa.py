@@ -763,6 +763,75 @@ def check_logo(cdir: Path, box: Path | None, y: int, samples: int = 12) -> list[
     return out
 
 
+OVERRIDE_CHECKS = {"face_box", "safe_zone_text", "caption_sync_word"}   # visual/safe zone and caption timing only, never content
+OVERRIDE_WHO = {"codee", "felulbiralo"}
+OVERRIDE_BASIS = {"frame", "listening"}
+OVERRIDE_DT = 0.2      # seconds around the overridden point
+OVERRIDE_BOX_PX = 40   # box corners must match within this
+
+
+def _problem_point(problem: str) -> tuple[str, float, tuple[int, int, int, int] | None, str | None] | None:
+    """(check type, time, box, word) of a per-point problem line that may be overridden, else None."""
+    m = re.match(r"safe zone: (face|text) at ([\d.]+)s box x(\d+)-(\d+) y(\d+)-(\d+)$", problem)
+    if m:
+        x0, x1, y0, y1 = (int(m.group(i)) for i in (3, 4, 5, 6))
+        return ("face_box" if m.group(1) == "face" else "safe_zone_text"), float(m.group(2)), (x0, y0, x1, y1), None
+    m = re.match(r"caption sync: '(.+)' lights up at ([\d.]+)s during silence$", problem)
+    if m:
+        return "caption_sync_word", float(m.group(2)), None, m.group(1).strip().lower()
+    return None
+
+
+def valid_override(o: dict) -> bool:
+    """A complete entry: one concrete point, who checked, on what basis, when. Anything less is ignored."""
+    if not isinstance(o, dict) or o.get("check") not in OVERRIDE_CHECKS:
+        return False
+    if str(o.get("by", "")).lower() not in OVERRIDE_WHO or o.get("basis") not in OVERRIDE_BASIS:
+        return False
+    if not str(o.get("date", "")).strip() or not str(o.get("reason", "")).strip():
+        return False
+    if not isinstance(o.get("t"), (int, float)):
+        return False
+    if o["check"] == "caption_sync_word":
+        return bool(str(o.get("word", "")).strip())
+    box = o.get("box")
+    return isinstance(box, list) and len(box) == 4 and all(isinstance(v, (int, float)) for v in box)
+
+
+def apply_overrides(cdir: Path, problems: list[str]) -> tuple[list[str], list[str]]:
+    """Drop per-point problems covered by a valid entry in cdir/override.json (written by Codee or the reviewer only).
+    Returns (remaining problems, 'OVERRIDDEN by <who>: <reason>' lines for qa.txt)."""
+    import json
+    try:
+        entries = json.loads((cdir / "override.json").read_text()).get("overrides", [])
+    except (OSError, ValueError, AttributeError):
+        return problems, []
+    entries = [o for o in entries if valid_override(o)]
+    if not entries:
+        return problems, []
+    left, notes = [], []
+    for p in problems:
+        pt = _problem_point(p)
+        hit = None
+        if pt:
+            kind, t, box, word = pt
+            for o in entries:
+                if o["check"] != kind or abs(o["t"] - t) > OVERRIDE_DT:
+                    continue
+                if kind == "caption_sync_word":
+                    if str(o["word"]).strip().lower() != word:
+                        continue
+                elif any(abs(a - b) > OVERRIDE_BOX_PX for a, b in zip(o["box"], box)):
+                    continue
+                hit = o
+                break
+        if hit:
+            notes.append(f"OVERRIDDEN by {hit['by']}: {hit['reason']} [{p}] ({hit['basis']}, {hit['date']})")
+        else:
+            left.append(p)
+    return left, notes
+
+
 def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, float]],
             source_starts: list[tuple[float, float]] = (), logo: tuple | None = None,
             montage: bool = False) -> list[str]:
@@ -798,7 +867,9 @@ def run_all(cfg: dict, cdir: Path, audio_fn, source_ends: list[tuple[float, floa
         problems += check_top_text(cdir)
     if logo:
         problems += check_logo(cdir, *logo)
-    (cdir / "qa.txt").write_text("\n".join(problems) + "\n" if problems else "ok\n")
+    problems, overridden = apply_overrides(cdir, problems)
+    lines = problems + overridden
+    (cdir / "qa.txt").write_text("\n".join(lines) + "\n" if problems else "\n".join(["ok"] + overridden) + "\n")
     log_qa(cdir, problems)
     return problems
 
