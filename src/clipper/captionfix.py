@@ -58,6 +58,21 @@ def _speech_between(env: np.ndarray, t0: float, t1: float, ratio: float = 0.5) -
     return i1 > i0 and float((env[i0:i1] >= SPEECH_DB).mean()) > ratio
 
 
+def _speech_run_end(env: np.ndarray, t0: float, t1: float, dip: float = 0.06) -> float:
+    """End (output s) of the continuous speech run that starts at t0, looking no further than t1. Dips below the
+    speech level shorter than `dip` count as inside the run. t0 itself must carry speech, else t0 is returned."""
+    i, n, end, quiet = int(t0 / HOP), min(len(env), int(t1 / HOP)), t0, 0
+    while i < n:
+        if env[i] >= SPEECH_DB:
+            end, quiet = (i + 1) * HOP, 0
+        else:
+            quiet += 1
+            if quiet * HOP > dip:
+                break
+        i += 1
+    return end
+
+
 def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
                  heard: list[tuple[str, float]], bias: float = 0.0,
                  env: np.ndarray | None = None) -> tuple[list[dict], list[str]]:
@@ -123,6 +138,16 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
             if env is not None and 0 < gap <= HOLE_SPEECH_MAX and _speech_between(
                     env, cur[a][1] - seg_s + off, cur[b][0] - seg_s + off, 0.5 if gap <= HOLE_MAX else 0.85):
                 closing = True
+            if not closing and env is not None and 0 < gap <= HOLE_SPEECH_MAX:
+                # a word tail held past its caption: speech runs on from the gap start. Extend over the run only
+                # (silence after it stays uncaptioned); a run reaching the next word closes the gap fully.
+                t0, t1 = cur[a][1] - seg_s + off, cur[b][0] - seg_s + off
+                run = _speech_run_end(env, t0, t1)
+                if run - t0 >= 0.08:
+                    if t1 - run <= 0.12:
+                        closing = True
+                    else:
+                        cur[a][1] = min(run + 0.03 + seg_s - off, cur[b][0], seg_e)
             if closing:
                 # never past the end of the segment: the middle would leave it and build_ass drops the word
                 cur[a][1] = min(cur[b][0], seg_e)

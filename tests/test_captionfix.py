@@ -136,7 +136,7 @@ def test_long_gap_with_full_speech_is_closed():
 
 def test_long_gap_mostly_silent_stays_open():
     words = [_w("a", 19.0, 19.93), _w("b", 20.50, 21.0)]
-    env = _env(22, [(19.0, 20.1), (20.45, 21.1)])  # ~0.17 s of quiet in the gap: not filled
+    env = _env(22, [(19.0, 19.9), (20.45, 21.1)])  # the gap is quiet: not filled
     out, _ = _retime(words, [(0.0, 22.0, 0.0)], [], env=env)
     assert out[0]["e"] == 19.93
 
@@ -180,3 +180,12 @@ def test_replayed_word_moves_into_previous_segment_and_is_dropped_from_old_one()
     ov = out[0]["ov"]
     assert ov[2] is None and ov[1][0] < 10.0 and 0 in ov
     assert len(moved) == 1
+
+
+def test_word_tail_run_is_covered_but_silence_after_it_is_not():
+    # 012313-c1 7.46-7.83: speech runs 0.3 s on from the caption end, then 0.1+ s of quiet before the next word
+    words = [_w("established", 6.0, 7.45), _w("an", 8.20, 8.40)]
+    env = _env(10, [(5.9, 7.80), (8.15, 8.5)])
+    env[int(7.80 * 100):int(8.15 * 100)] = -60.0
+    out, _ = _retime(words, [(0.0, 10.0, 0.0)], [], env=env)
+    assert 7.74 <= out[0]["e"] < 8.0
