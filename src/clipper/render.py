@@ -1,5 +1,6 @@
 """Step 5: render each selected clip as a 1080x1920 Short with layout, word-by-word captions and a hook."""
 
+import math
 import re
 import subprocess
 from pathlib import Path
@@ -67,6 +68,7 @@ def face_boxes(video: Path, start: float, end: float, timed: bool = False,
         t += 0.5
     cap.release()
     face_boxes.last_identity = {"locked": locked, "other_faces": others, "samples": samples}
+    face_boxes.last_top = min((b[1] for b in boxes), default=None)  # highest face top seen (frame fraction)
     return (timed_pts, samples) if timed else (boxes, samples)
 
 
@@ -173,6 +175,26 @@ def pick_layout(cfg: dict, source: dict, video: Path, info: dict, start: float,
     return "fit", None, None, None
 
 
+CROP_FACE_TOP_MIN = 240   # px in the 1920 frame: qa.py TOP is 220, plus a 20 px reserve
+FACE_TOP_PAD_MAX = 200
+
+
+def face_top_pad(face_top: float | None, sh: int, ch: int, H: int, need: int = CROP_FACE_TOP_MIN) -> int:
+    """Blurred top pad (px) that lifts the highest face top to >= `need` in the output.
+
+    face_top is the face box top as a fraction of the source frame, ch the crop height in source px
+    (the crop starts at y=0). With a pad p the foreground is scaled to H-p and sits below the pad, so the
+    face top lands at p + t*(H-p) with t = face_top*sh/ch/... the unpadded position fraction. Solve for p.
+    """
+    if face_top is None:
+        return 0
+    t = min(max(face_top * sh / ch, 0.0), 0.99)
+    if t * H >= need:
+        return 0
+    pad = int(math.ceil((need - t * H) / (1 - t)))
+    return min(pad + pad % 2, FACE_TOP_PAD_MAX)
+
+
 def crop_x_bounds(source: dict, sw: int, cw: int, crop_h: float) -> tuple[int, int]:
     """Allowed crop x range so the crop never shows a source's overlay rects (chat, viewer count,
     sub goal, logos). Rects are [x, y, w, h] fractions; only rects reaching into the crop height count."""
@@ -191,7 +213,7 @@ def crop_x_bounds(source: dict, sw: int, cw: int, crop_h: float) -> tuple[int, i
 
 def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam: list[float] | None,
                   inp: str, out: str, track: list | None = None, seg_start: float = 0.0,
-                  face_at: float = 0.5, source: dict | None = None) -> str:
+                  face_at: float = 0.5, source: dict | None = None, face_top: float | None = None) -> str:
     rc = cfg["render"]
     W, H = rc["width"], rc["height"]
     sw, sh = info["width"], info["height"]
@@ -226,6 +248,10 @@ def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam:
     crop_h = src.get("crop_h", 1.0)
     top_pad = int(src.get("top_pad", 0))
     ch = even(sh * crop_h)
+    # Face-tracked crop: a close-up whose face top rides above the top UI zone gets a blurred top margin
+    # (smaller zoom) so the face top lands >= CROP_FACE_TOP_MIN px. The QA limit itself stays untouched.
+    if src and face_top is not None:
+        top_pad = max(top_pad, face_top_pad(face_top, sh, ch, H))
     fg_h = H - top_pad
     cw = min(sw, even(ch * W / fg_h))
     lo, hi = crop_x_bounds(src, sw, cw, crop_h)
@@ -1517,6 +1543,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             log(f"  tightened {len(cuts_f)} internal gaps: {sum(f1 - f0 for f0, f1 in cuts_f) / fps:.2f}s removed")
         clip = {**clip, "cold_len": segments[0][1] - segments[0][0] if len(raw) > 1 else 0.0}
         layout, cx, cam, track = pick_layout(cfg, source, video, info, main[0], main[1])
+        face_top = getattr(face_boxes, "last_top", None) if layout in ("center", "auto") else None
         if track:
             log(f"  tracking: {len(track)} face samples")
         if source.get("identity") and layout in ("center", "auto"):
@@ -1622,7 +1649,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 n_out = round(nframes[i] * float(rc["fps"]) / info["fps"]) if rc["fps"] else nframes[i]
                 graph.append(f"[{i}:v]setpts=PTS-STARTPTS,fps={rc['fps']},trim=end_frame={n_out}[z{i}]")
                 graph.append(layout_filter(cfg, info, layout, cx, cam, f"z{i}", f"l{i}",
-                                           track=seg_track, seg_start=s,
+                                           track=seg_track, seg_start=s, face_top=face_top,
                                            source=source if (source.get("campaign_url") or source.get("montage")) else None))
             # Short audio fades at every cut so word-boundary splices do not click.
             fi, fo, dur = AUDIO_FADE_IN, AUDIO_FADE_OUT, (nframes[i] - 0.5) / fps
