@@ -404,6 +404,12 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
             if black > black_max(cfg):
                 log(f"dropping pick '{p.get('title', '')[:50]}': {black:.0%} of the window is black (title cards)")
                 continue
+        if (jd / "source.mp4").exists():
+            from .shotvar import variety_problem
+            vp = variety_problem(jd / "source.mp4", seg_words, start, end)
+            if vp:
+                log(f"dropping pick '{p.get('title', '')[:50]}': {vp}")
+                continue
         if any(start < c["end"] and end > c["start"] for c in clips):
             continue  # overlapping pick from two transcript parts
         if any(start + my_off < c["end"] and end + my_off > c["start"] for c in earlier):
