@@ -1547,6 +1547,10 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                     f1 = int((w["s"] - 0.04 - ms_) * fps) // r * r
                 if ms_ + f0 / fps < w["e"] < ms_ + f1 / fps:
                     f0 = -(-int((w["e"] + 0.04 - ms_) * fps) // r) * r
+            # The kept part must end in silence, not in a word's decaying tail (QA: cut during sound).
+            q = first_silence(audio_fn, ms_ + f0 / fps, min(ms_ + f1 / fps, ms_ + f0 / fps + 0.15))
+            if q is not None:
+                f0 = -(-int((q + 0.06 - ms_) * fps) // r) * r  # QA measures the last 60 ms before the cut
             if f1 - f0 >= r and (not cuts_f or f0 > cuts_f[-1][1]):
                 cuts_f.append((f0, f1))
         if cuts_f:
