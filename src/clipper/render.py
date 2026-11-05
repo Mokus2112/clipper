@@ -864,6 +864,7 @@ def audio_chain(idx: int, fi: float, fo: float, dur: float, a_dur: float) -> str
     return (f"[{idx}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
             f"apad=whole_dur={a_dur:.6f},asetpts=PTS-STARTPTS,atrim=end={a_dur:.6f}")
 SNAP_PRE = 0.09         # s of pre-roll before the first word, never before the previous word's end
+START_PRE = 0.06        # s: the first sound starts at least this long after the first frame (klip template: 60-100 ms)
 END_TAIL = 0.5          # s of room after the end of the speech at the clip's end (klip template); main segment only
 SNAP_POST = 0.22        # s of tail after the last word, never past the next word's start - 0.05
 
@@ -1042,9 +1043,35 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
                     if level_db(audio_fn, t_ - 0.025, 0.05) <= END_QUIET_DB and level_db(audio_fn, t_ - 0.06, 0.06) <= -40.0:
                         e1 = t_
                         break
+    if audio_fn is not None and START_PRE:
+        # floor: end of the last word that finishes before the cut (the segment may already hold words before
+        # `first`: "I" sat before "think" in alliance c1); a word that straddles the cut blocks any move.
+        straddle = any(w["s"] < s0 < w["e"] for w in words)
+        floor = max((w["e"] for w in words if w["e"] <= s0 + 0.005), default=s0 - START_PRE)
+        s0 = extend_preroll(audio_fn, s0, START_PRE, s0 if straddle else floor)
     if tail and audio_fn is not None:
         e1 = extend_tail(audio_fn, e1, tail, nxt["s"] - 0.05 if nxt else None)
     return round(s0, 3), round(e1, 3)
+
+
+def extend_preroll(audio_fn, s0: float, pre: float, floor: float) -> float:
+    """Start the segment earlier so the first sound comes at least `pre` s after the first frame.
+
+    The first sound is the first 10 ms window above SILENCE_DB within 0.3 s of s0. The start moves back by
+    the missing time, but only through silence (every 10 ms window of the added stretch <= SILENCE_DB) and
+    never before `floor` (the previous word's end): with nothing quiet it moves as far as it can or stays.
+    """
+    import numpy as np
+    a = audio_fn(s0, 0.3)
+    step = 160
+    onset = next((k * 0.01 for k in range(len(a) // step)
+                  if 20 * np.log10(np.sqrt(np.mean(a[k * step:(k + 1) * step] ** 2)) + 1e-9) > SILENCE_DB), None)
+    if onset is None or onset >= pre:
+        return s0
+    new = s0
+    while new - 0.01 >= floor and (s0 + onset) - (new - 0.01) <= pre + 1e-9 and level_db(audio_fn, new - 0.01, 0.01) <= SILENCE_DB:
+        new -= 0.01
+    return new
 
 
 def extend_tail(audio_fn, e1: float, tail: float, limit: float | None = None) -> float:
@@ -1805,8 +1832,10 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 heard = heard_in_output(seg_wav, wav_t0, segments, out_audio)
                 env_out = envelope_db(out_audio)
                 cw, repaired = repair_words(cw, segments, heard, env_out)
+                from .captionfix import filler_spans
                 fixed, moved = retime_words(cw, segments, heard, bias=cfg["captions"].get("sync_shift", 0.07),
-                                            env=env_out, audio=out_audio)
+                                            env=env_out, audio=out_audio,
+                                            fillers=filler_spans(clip["words"], segments, lambda t: bool(_HESITATION.match(t))))
                 import json as _json
                 (cdir / "retime.json").write_text(_json.dumps(
                     {"segments": segments, "caption": [(w["w"], w["s"]) for w in cw], "heard": heard, "moved": moved, "repaired": repaired}))

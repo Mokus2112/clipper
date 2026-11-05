@@ -1,3 +1,5 @@
+import numpy as np
+
 from clipper.captionfix import retime_words
 
 SEGS = [(14.64, 20.40, 0.0)]
@@ -325,3 +327,53 @@ def test_word_heard_before_a_cut_is_mapped_through_the_segments_not_shifted_in_s
     out, moved = _retime(words, segs, heard, bias=0.07, env=env)
     assert any(m.startswith("where@") for m in moved)
     assert out[1]["s"] < 4.0
+
+
+from clipper.captionfix import filler_spans
+
+HES = lambda t: t.lower().strip(",.!?") in ("um", "uh")  # noqa: E731
+
+
+def test_because_after_um_is_not_moved_onto_the_um():
+    # alliance c1 (start 14.598): "Um," 29.18-29.74 sits at output 12.37-12.93; whisper hears "because" at 12.08
+    # (the um merged into it), the move would put the caption on the um and leave the real word uncaptioned.
+    segs = [(27.74, 28.78, 11.22), (29.07, 33.58, 12.26)]
+    words = [w("control.", 28.34, 28.82), w("because", 29.61, 30.24), w("these", 30.24, 30.66)]
+    all_words = [words[0], w("Um,", 29.18, 29.57), *words[1:]]
+    heard = [("control", 11.66), ("because", 12.08), ("these", 13.43)]
+    fillers = filler_spans(all_words, segs, HES)
+    assert len(fillers) == 1 and abs(fillers[0][0] - 12.37) < 0.01
+    env = np.full(1500, -70.0)                      # 10 ms dB envelope of the output: speech where "control" ends
+    env[1160:1230] = -20.0                          # 11.60-12.30 s (the speaker's last syllables of "control")
+    env[1237:1293] = -20.0                          # the um, 12.37-12.93
+    moved_without, log0 = retime_words(words, segs, heard, env=env)
+    out, log_ = retime_words(words, segs, heard, env=env, fillers=fillers)
+    assert any(m.startswith("because") for m in log0)  # without the guard the caption leaves its word (the old failure)
+    # not moved to the heard 12.08; the caption still covers the real word (source 29.61-30.24, output 12.80-13.43)
+    assert not any(m.startswith("because") for m in log_) and out[1]["s"] <= 29.61 and out[1]["e"] >= 30.24
+    moved_to = next(x for x in moved_without if x["w"] == "because")
+    assert moved_to["e"] < 29.9  # unguarded: the caption was cut short (0.45 s cap) and the real word had none
+
+
+def test_feels_after_um_with_the_um_known_is_left_at_the_aligned_time():
+    # source audio: um 15.94-16.26, silence, FEELS onset ~16.5 = the aligned 16.52; whisper heard the um as "feels"
+    words = [w("that,", 15.66, 16.0), w("feels", 16.52, 16.92), w("especially", 16.92, 17.8)]
+    heard = [("that", 0.95), ("feels", 1.30), ("especially", 2.28)]
+    fillers = filler_spans([words[0], w("um,", 15.93, 16.203), *words[1:]], SEGS, HES)
+    out, moved = retime_words(words, SEGS, heard, fillers=fillers)
+    assert out[1]["s"] == 16.52 and not any(m.startswith("feels") for m in moved)
+
+
+def test_a_move_that_does_not_touch_a_filler_still_happens():
+    words = [w("this", 15.0, 15.3), w("whole", 16.0, 16.4)]
+    heard = [("this", 0.9), ("whole", 1.0)]
+    fillers = [(5.0, 5.3)]
+    out, moved = retime_words(words, SEGS, heard, fillers=fillers)
+    assert any(m.startswith("this") for m in moved)
+
+
+def test_filler_spans_use_output_time_and_skip_cut_out_ums():
+    segs = [(10.0, 12.0, 0.0), (20.0, 22.0, 2.0)]
+    ws = [w("Um,", 10.5, 10.9), w("so", 11.0, 11.4), w("uh", 15.0, 15.3), w("Uh,", 20.5, 20.8)]
+    got = filler_spans(ws, segs, HES)
+    assert [(round(a, 3), round(b, 3)) for a, b in got] == [(0.5, 0.9), (2.5, 2.8)]

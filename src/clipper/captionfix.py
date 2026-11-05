@@ -31,6 +31,13 @@ def output_occurrences(words: list[dict], segments: list[tuple[float, float, flo
     return sorted(occ, key=lambda o: o[2])
 
 
+def filler_spans(words: list[dict], segments: list[tuple[float, float, float]], is_filler) -> list[tuple[float, float]]:
+    """Output-time (start, end) of every um/uh the clip keeps: speech that is never captioned.
+    words: the full clip words (hesitations included), is_filler(text) -> bool."""
+    fill = [dict(w) for w in words if is_filler(w["w"])]
+    return [(t, t + max(fill[i]["e"] - fill[i]["s"], 0.0)) for i, _k, t in output_occurrences(fill, segments)]
+
+
 def pair_with_leftovers(cap: list[tuple[str, float]], heard: list[tuple[str, float]]) -> list[tuple[int, int]]:
     """pair() plus a second pass: a caption word the sequence match skipped (typically a one-letter word like "a"
     next to a changed neighbour) is linked to the nearest unused heard word with the same text within RETIME_MAX."""
@@ -74,9 +81,28 @@ def _speech_run_end(env: np.ndarray, t0: float, t1: float, dip: float = 0.06) ->
     return end
 
 
+FILLER_LEAD = 0.5   # s: a heard start this far before an um/uh (and up to its end) can be that um/uh merged into the word
+
+
+def _merged_with_filler(occ, ci: int, t_cap: float, t_heard: float, fillers: list[tuple[float, float]]) -> bool:
+    """True when the word occ[ci] directly follows an um/uh and its heard start lies in or just before that um/uh.
+
+    Whisper often reads "Um, because" as one "because" starting at the um (alliance c1: because 12.80 -> 12.08, the
+    caption then ran over the um and the real word had none; FEELS after a 16.0 um in the same clip). The heard time
+    of such a word says nothing about the word itself, so it is not retimed."""
+    for f0, f1 in fillers:
+        if t_cap < f1 - 0.15 or not (f0 - FILLER_LEAD <= t_heard <= f1 + 0.05):
+            continue
+        nxt = next((c for c in range(len(occ)) if occ[c][2] > f0 - 0.05 and occ[c][1] == occ[ci][1]), None)
+        if nxt == ci:
+            return True
+    return False
+
+
 def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
                  heard: list[tuple[str, float]], bias: float = 0.0,
-                 env: np.ndarray | None = None, audio: np.ndarray | None = None) -> tuple[list[dict], list[str]]:
+                 env: np.ndarray | None = None, audio: np.ndarray | None = None,
+                 fillers: list[tuple[float, float]] | None = None) -> tuple[list[dict], list[str]]:
     """words: caption words (source time); heard: whisper (text, output start) of the finished audio.
     bias: build_ass later shifts every word earlier by sync_shift, so a moved word is placed at heard + bias.
     Returns the words with grossly misplaced starts moved to the heard start, and a log line per moved word.
@@ -85,6 +111,9 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
     short gap with speech energy is closed (HOLE_MAX). Without a nearby onset the whisper time stays (log: "~").
     Each occurrence is timed on its own: a word replayed in two segments gets a per-segment override
     w["ov"] = {segment index: (s, e)} that build_ass uses for that segment (its base s/e stay the source time).
+    fillers: output-time spans of um/uh (filler_spans). A word is never moved so that it sits on one: whisper often
+    merges "Um, because" into one "because" heard at the um (alliance c1: because 12.80 -> 12.08, the caption then
+    covered the um and the real word had none).
     audio: optional output audio (16 kHz). With it the first caption of every segment is moved to the real speech onset
     when the cut leaves 120-300 ms of silence in front of it (see _onset_pass)."""
     occ = output_occurrences(words, segments)
@@ -125,6 +154,8 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
             nxt = next((occ[c2] for c2 in range(ci + 1, len(occ)) if occ[c2][1] == k), None)
             if nxt is not None and new_s > words[nxt[0]]["s"] - MIN_WORD and new_s > w["s"]:
                 continue  # moving later must not jump over the next word (chip-roy c1: "would" past "say,")
+            if fillers and _merged_with_filler(occ, ci, t_cap, t_heard, fillers):
+                continue  # whisper heard the um/uh as the start of this word ("Um, because" -> "because"): keep the aligned time
             # build_ass captions a word only if it starts inside its segment and its middle is inside too. A word
             # moved out of its segment would vanish and leave a hole under speech. If it landed in the NEIGHBOUR
             # segment (the aligner put it past a cut, the speaker said it before it: "a" at a join), it moves there
