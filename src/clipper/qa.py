@@ -832,6 +832,29 @@ FACE_OVERLAP_MIN_PX = 20   # ignore hair-tip / chin grazes below this
 FACE_BEARD_MARGIN = 0.04   # detector boxes stop near the chin; a little extra for the beard
 
 
+FALSE_FACE_SCORE_GAP = 0.10   # a stacked box must score this much below the face above it to be dropped
+FALSE_FACE_X_OVERLAP = 0.3    # share of the narrower box that must overlap in x
+
+
+def drop_false_faces(faces: list[tuple[float, float, float, float, float]]) -> list[tuple[float, float, float, float, float]]:
+    """Drop detector boxes (x, y, w, h, score) that are hand/hair artefacts under a real face: the box centre lies below
+    another face's bottom edge, the boxes overlap in x, and its score is clearly lower. Two real stacked faces score alike and stay."""
+    keep = []
+    for i, (x, y, w, h, sc) in enumerate(faces):
+        cy = y + h / 2
+        false = False
+        for j, (ox, oy, ow, oh, osc) in enumerate(faces):
+            if i == j or cy <= oy + oh:
+                continue
+            xo = min(x + w, ox + ow) - max(x, ox)
+            if xo >= FALSE_FACE_X_OVERLAP * min(w, ow) and sc <= osc - FALSE_FACE_SCORE_GAP:
+                false = True
+                break
+        if not false:
+            keep.append((x, y, w, h, sc))
+    return keep
+
+
 def caption_face_overlaps(cdir: Path, fonts: Path, step: float = 0.2) -> list[tuple[float, int]]:
     """(t, overlap px) where a caption block sits on a speaker's face (box extended down for beard/jaw).
     Checks every `step` s, the caption block and the hook alike."""
@@ -850,8 +873,8 @@ def caption_face_overlaps(cdir: Path, fonts: Path, step: float = 0.2) -> list[tu
         if not ok:
             continue
         _, faces = det.detect(cv2.resize(fr, (540, 960)))
-        for f in faces if faces is not None else []:
-            fx, fy, fw, fh = (float(v) * 2 for v in f[:4])
+        boxes = [tuple(float(v) * 2 for v in f[:4]) + (float(f[14]),) for f in (faces if faces is not None else [])]
+        for fx, fy, fw, fh, _sc in drop_false_faces(boxes):
             if fw < 1080 * SPEAKER_FACE_W:
                 continue
             fb = fy + fh * (1 + FACE_BEARD_MARGIN)
