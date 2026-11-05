@@ -288,7 +288,7 @@ sources:
       Skip ad reads and sponsor segments. Kind, real, relatable sister moments; no mocking, no ragebait.
       Minimum 10 seconds, end on a complete sentence.
 
-  # Let Him Mansplain (ClipLaunch), $1.25 CPM TikTok/IG, joined 2026-11-05. Posting WAITS for a dedicated LHM page.
+  # Let Him Mansplain (ClipLaunch), $1.25 CPM TikTok/IG, joined 2026-11-05. PAUSED (Codee 11-05): do not produce, needs a dedicated LHM page.
   # Sources: Frame.io content folder (brief in agents/social/work/campaigns/705f6e21-*.md). Tag @lethimmansplain first line.
   - name: let-him-mansplain
     streamer: Let Him Mansplain
