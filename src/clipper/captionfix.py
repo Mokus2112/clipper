@@ -151,17 +151,62 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
             if closing:
                 # never past the end of the segment: the middle would leave it and build_ass drops the word
                 cur[a][1] = min(cur[b][0], seg_e)
+    if env is not None:
+        _close_joins(cur, segments, env)
     out = [dict(w) for w in words]
     for i, w in enumerate(out):
         ks = [k for (j, k) in cur if j == i]
         gone = {k for (j, k) in dropped if j == i}
         if len(ks) == 1 and not (gone and len(occ_count(occ, i)) > 1):
             (k,) = ks
-            if (i, k) in touched or cur[(i, k)][1] != w["e"]:
+            if (i, k) in touched or cur[(i, k)] != [w["s"], w["e"]]:
                 w["s"], w["e"] = cur[(i, k)]
-        elif ks and (gone or any((i, k) in touched or cur[(i, k)][1] != w["e"] for k in ks)):
+        elif ks and (gone or any((i, k) in touched or cur[(i, k)] != [w["s"], w["e"]] for k in ks)):
             w["ov"] = {**{k: tuple(cur[(i, k)]) for k in ks}, **{k: None for k in gone}}
     return out, moved
+
+
+def _speech_run_start(env: np.ndarray, t0: float, t1: float, dip: float = 0.06) -> float:
+    """Start (output s) of the continuous speech run that ends at t1, looking back no further than t0."""
+    i, lo, start, quiet = int(t1 / HOP) - 1, int(t0 / HOP), t1, 0
+    while i >= lo and i < len(env):
+        if env[i] >= SPEECH_DB:
+            start, quiet = i * HOP, 0
+        else:
+            quiet += 1
+            if quiet * HOP > dip:
+                break
+        i -= 1
+    return start
+
+
+def _close_joins(cur: dict, segments: list[tuple[float, float, float]], env: np.ndarray) -> None:
+    """Close a short caption hole that straddles a segment join (the per-segment pass never sees it): the last caption
+    of segment k-1 is held to the speech run end (at most the segment end), the first caption of segment k starts at
+    the speech start (at least the segment start). Silence in between stays uncaptioned."""
+    for k in range(1, len(segments)):
+        ps, pe, po = segments[k - 1]
+        ns, ne, no = segments[k]
+        prev = [key for key in cur if key[1] == k - 1]
+        nxt = [key for key in cur if key[1] == k]
+        if not prev or not nxt:
+            continue
+        a = max(prev, key=lambda key: cur[key][1])
+        b = min(nxt, key=lambda key: cur[key][0])
+        ea, sb = cur[a][1] - ps + po, cur[b][0] - ns + no
+        if not 0 < sb - ea <= HOLE_SPEECH_MAX:
+            continue
+        join = no
+        if _speech_between(env, ea, sb, 0.5 if sb - ea <= HOLE_MAX else 0.85):
+            cur[a][1] = pe
+            cur[b][0] = ns
+            continue
+        run = _speech_run_end(env, ea, min(join, sb))
+        if run - ea >= 0.08:
+            cur[a][1] = min(run + 0.03 + ps - po, pe)
+        st = _speech_run_start(env, max(join, ea), sb)
+        if sb - st >= 0.08:
+            cur[b][0] = max(st - 0.03 + ns - no, ns)
 
 
 def output_audio(wav, wav_t0: float, segments: list[tuple[float, float, float]]) -> np.ndarray:

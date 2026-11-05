@@ -840,7 +840,9 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
                 # Connected speech, no 60 ms pause: mlx word starts run up to 0.2 s late (Cotra c1 cut
                 # inside "so" at -20 dB). Take the deepest dip just before, if it is a real one.
                 # Scan the same 30 ms window qa.check_segment_starts measures.
-                cand = [(level_db(audio_fn, t_, 0.03), -t_) for t_ in (s0 - 0.35 + 0.005 * k for k in range(70))]
+                # Window +-0.5 s (Codee #929), but never later than the first word's start (no clipped first word).
+                hi = min(s0 + 0.5, first["s"])
+                cand = [(level_db(audio_fn, t_, 0.03), -t_) for t_ in (s0 - 0.5 + 0.005 * k for k in range(200)) if t_ <= hi]
                 lvl, nt = min(cand)
                 if lvl <= -40.0:
                     s0 = -nt
@@ -859,6 +861,15 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
                 if level_db(audio_fn, t_ - 0.025, 0.05) <= END_QUIET_DB and level_db(audio_fn, t_ - 0.06, 0.06) <= -40.0:
                     e1 = t_
                     break
+            else:
+                # Nothing quiet ahead: the nearest quiet point up to 0.5 s back (Codee #929), never into the last word.
+                t_ = e1
+                floor = max(e1 - 0.5, last["s"] + 0.15)
+                while t_ > floor:
+                    t_ -= 0.01
+                    if level_db(audio_fn, t_ - 0.025, 0.05) <= END_QUIET_DB and level_db(audio_fn, t_ - 0.06, 0.06) <= -40.0:
+                        e1 = t_
+                        break
     return round(s0, 3), round(e1, 3)
 
 

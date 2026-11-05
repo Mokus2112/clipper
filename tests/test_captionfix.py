@@ -189,3 +189,20 @@ def test_word_tail_run_is_covered_but_silence_after_it_is_not():
     env[int(7.80 * 100):int(8.15 * 100)] = -60.0
     out, _ = _retime(words, [(0.0, 10.0, 0.0)], [], env=env)
     assert 7.74 <= out[0]["e"] < 8.0
+
+
+def test_hole_across_a_segment_join_is_closed():
+    # cotra 012943-c1 holes 8.07-8.55, 15.69-16.17, 32.30-32.99: the join sits inside the hole, speech runs through
+    segs = [(10.0, 18.5, 0.0), (30.0, 45.0, 8.5)]
+    words = [_w("a", 17.0, 18.07), _w("b", 30.05, 30.6)]  # a ends out 8.07, b starts out 8.55
+    env = _env(24, [(7.0, 9.5)])
+    out, _ = _retime(words, segs, [], env=env)
+    assert out[0]["e"] >= 18.5 - 1e-6 and out[1]["s"] <= 30.0 + 0.021
+
+
+def test_join_hole_in_silence_stays_open():
+    segs = [(10.0, 18.5, 0.0), (30.0, 45.0, 8.5)]
+    words = [_w("a", 17.0, 18.07), _w("b", 30.05, 30.6)]
+    env = _env(24, [(7.0, 8.1), (8.5, 9.5)])
+    out, _ = _retime(words, segs, [], env=env)
+    assert out[0]["e"] < 18.3 and out[1]["s"] > 30.0
