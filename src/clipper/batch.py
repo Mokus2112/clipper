@@ -55,7 +55,7 @@ def run_batch(cfg: dict, source_names: list[str], notify: bool = True) -> dict:
         from .rank import rank
         from .prescreen import prescreen
         from .render import render
-        from .common import job_dir, remove_source
+        from .common import prune_sources
         try:
             job = fetch(cfg, name, url, section=None)
             detect(cfg, job)
@@ -69,8 +69,7 @@ def run_batch(cfg: dict, source_names: list[str], notify: bool = True) -> dict:
                 results[name] = {"status": "ok", "clips": len(clips), "url": url}
             else:
                 results[name] = {"status": "no_clips", "url": url}
-            if not cfg["fetch"]["keep_source"]:
-                remove_source(job_dir(cfg, job))
+            prune_sources(cfg)
         except Exception as exc:
             log(f"batch: pipeline failed for {name}: {exc}")
             results[name] = {"status": "error", "reason": str(exc)}

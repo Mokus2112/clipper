@@ -104,3 +104,22 @@ def remove_source(jd: Path) -> int:
             freed += p.stat().st_size
         p.unlink(missing_ok=True)
     return freed
+
+
+def prune_sources(cfg: dict, now: float | None = None) -> int:
+    """Delete downloaded sources older than fetch.keep_source_days (default 7); returns bytes freed.
+
+    keep_source: true disables pruning. Age = newest mtime of the job's source files.
+    """
+    import time
+    f = cfg.get("fetch", {})
+    if f.get("keep_source"):
+        return 0
+    cutoff = (now or time.time()) - float(f.get("keep_source_days", 7)) * 86400
+    freed = 0
+    jobs = path_of(cfg, "data") / "jobs"
+    for jd in (jobs.iterdir() if jobs.exists() else []):
+        files = [p for p in jd.glob("source.*") if p.exists()]
+        if jd.is_dir() and files and max(p.stat().st_mtime for p in files) < cutoff:
+            freed += remove_source(jd)
+    return freed

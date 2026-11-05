@@ -3,7 +3,7 @@
 import argparse
 import json
 
-from .common import job_dir, load_config, path_of, remove_source
+from .common import job_dir, load_config, path_of, prune_sources, remove_source
 from . import review_queue
 
 
@@ -67,8 +67,7 @@ def main() -> None:
                 if cfg["telegram"]["notify"] and not a.no_notify:
                     from .notify import notify
                     notify(cfg)
-            if not cfg["fetch"]["keep_source"]:
-                remove_source(job_dir(cfg, job))
+            prune_sources(cfg)
         print(job)
     elif a.cmd == "detect":
         from .detect import detect
