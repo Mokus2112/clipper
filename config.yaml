@@ -304,6 +304,25 @@ sources:
       Prefer two or more guests with varied answers; humorous, big reaction, truth bomb. Strong hook, clean
       subtitles, meaningfully different from other clippers. Accurate titles, no bait.
 
+  # Iced Coffee Hour x Greg Lav (Clip Strategy), $0.75 CPM, IG Reels + YT Shorts, joined 2026-11-05 (Codee).
+  # Brief: agents/social/work/campaigns/a6e3a983-*.md. ONLY source: youtube.com/watch?v=5pk8HLcAAT0.
+  # Required: 15 s+, English captions all through (key word highlight, off faces), own hook, ORIGINAL B-ROLL
+  # (free licence only, no AI), own caption, tags YT @GregLaVecchia + @theicedcoffeehour / IG @greglav + @theicedcoffeehour.
+  # INACTIVE until the b-roll plan is approved by Codee.
+  - name: iced-coffee-hour
+    active: false
+    streamer: Greg Lav (The Iced Coffee Hour)
+    channel_url: https://www.youtube.com/watch?v=5pk8HLcAAT0
+    campaign_url: https://contentrewards.com/c/campaigns/a6e3a983-c8c7-4c4f-ac48-22022b391562
+    layout: auto
+    platforms: [youtube, instagram]
+    tags: [icedcoffeehour, greglav, business]
+    credit: ""
+    required_text: "@GregLaVecchia @theicedcoffeehour"
+    rank_notes: >-
+      Business/startup lessons from Greg Lav (Bloom Nutrition) with a concrete number or step. Open on a true hook
+      line, end on a complete sentence, 15-45 seconds. Needs spots for original b-roll. No clickbait.
+
   - name: cod-mw4-trailer
     streamer: Call of Duty
     channel_url: https://www.callofduty.com
