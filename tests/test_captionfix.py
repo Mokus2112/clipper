@@ -91,3 +91,62 @@ def test_leftover_pass_never_pairs_beyond_the_mismatch_window():
     heard = [("a", 8.0), ("y", 6.0)]
     out, moved = retime_words(words, segs, heard)
     assert out[0]["s"] == 5.0 and moved == []
+
+
+# --- energy-onset retime (Codee #908) ---
+import numpy as np
+
+from clipper.captionfix import HOLE_MAX, MIN_WORD, retime_words as _retime
+
+
+def _env(n_s, speech):
+    """10 ms dB envelope: -60 dB silence, -20 dB inside the given (start, end) output spans."""
+    env = np.full(int(n_s * 100), -60.0)
+    for a, b in speech:
+        env[int((a - 0.05) * 100):int((b - 0.05) * 100)] = -20.0
+    return env
+
+
+def _w(w, s, e):
+    return {"w": w, "s": s, "e": e}
+
+
+def test_hole_with_speech_energy_is_closed():
+    # 010609-c1 gap 12.48-12.85 (0.37 s, under HOLE_MAX): speech runs through it, the caption must hold on
+    words = [_w("this", 12.10, 12.48), _w("phase", 12.85, 13.30)]
+    env = _env(14, [(12.0, 13.4)])
+    out, _ = _retime(words, [(0.0, 14.0, 0.0)], [], env=env)
+    assert out[0]["e"] == 12.85
+
+
+def test_hole_in_silence_stays_open():
+    # THEN case: no speech energy in the gap, so no caption may be drawn there
+    words = [_w("and", 29.20, 29.50), _w("then", 29.85, 30.20)]
+    env = _env(31, [(29.1, 29.5), (29.85, 30.3)])
+    out, _ = _retime(words, [(0.0, 31.0, 0.0)], [], env=env)
+    assert out[0]["e"] == 29.50
+
+
+def test_long_gap_with_speech_is_not_closed_by_hole_rule():
+    words = [_w("a", 19.0, 19.93), _w("b", 20.50, 21.0)]  # 0.57 s > HOLE_MAX, untouched words
+    env = _env(22, [(19.0, 21.1)])
+    out, _ = _retime(words, [(0.0, 22.0, 0.0)], [], env=env)
+    assert 0.57 > HOLE_MAX and out[0]["e"] == 19.93
+
+
+def test_snap_to_onset_within_window_and_flag_outside():
+    words = [_w("hello", 5.0, 5.4), _w("world", 6.0, 6.4)]
+    # speech burst for 'hello' starts at 5.7; whisper said 5.55 (150 ms off, inside the window)
+    env = _env(8, [(5.7, 6.1)])
+    out, moved = _retime(words, [(0.0, 8.0, 0.0)], [("hello", 5.55)], env=env)
+    assert abs(out[0]["s"] - (5.7 + 0.0)) < 0.06 and "~" not in moved[0]
+    # nearest onset is 0.7 s from the whisper start: whisper time kept and flagged
+    out2, moved2 = _retime(words, [(0.0, 8.0, 0.0)], [("hello", 5.6)], env=_env(8, [(6.3, 6.7)]))
+    assert moved2 and moved2[0].endswith("~")
+
+
+def test_snap_never_swaps_words():
+    words = [_w("one", 2.0, 2.3), _w("two", 2.35, 2.6)]
+    env = _env(4, [(2.7, 3.0)])  # single onset: both words would snap onto it
+    out, _ = _retime(words, [(0.0, 4.0, 0.0)], [("one", 2.7), ("two", 2.72)], env=env)
+    assert out[0]["s"] < out[1]["s"] and out[1]["s"] - out[0]["s"] >= MIN_WORD - 1e-9

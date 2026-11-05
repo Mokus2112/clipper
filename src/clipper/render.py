@@ -1477,10 +1477,13 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         if wav_audio and clip.get("words") and cfg["captions"].get("retime_from_audio", True):
             # Forced alignment can sit 0.3-0.6 s off after fillers: move grossly misplaced words to the heard start.
             try:
-                from .captionfix import heard_in_output, retime_words
+                from .captionfix import heard_in_output, output_audio, retime_words
+                from .syncmeter import envelope_db
                 cw = caption_words(merge_punct(clip["words"]))
-                heard = heard_in_output(seg_wav, wav_t0, segments)
-                fixed, moved = retime_words(cw, segments, heard, bias=cfg["captions"].get("sync_shift", 0.07))
+                out_audio = output_audio(seg_wav, wav_t0, segments)
+                heard = heard_in_output(seg_wav, wav_t0, segments, out_audio)
+                fixed, moved = retime_words(cw, segments, heard, bias=cfg["captions"].get("sync_shift", 0.07),
+                                            env=envelope_db(out_audio))
                 import json as _json
                 (cdir / "retime.json").write_text(_json.dumps(
                     {"segments": segments, "caption": [(w["w"], w["s"]) for w in cw], "heard": heard, "moved": moved}))
