@@ -157,3 +157,14 @@ def test_snap_never_swaps_words():
     env = _env(4, [(2.7, 3.0)])  # single onset: both words would snap onto it
     out, _ = _retime(words, [(0.0, 4.0, 0.0)], [("one", 2.7), ("two", 2.72)], env=env)
     assert out[0]["s"] < out[1]["s"] and out[1]["s"] - out[0]["s"] >= MIN_WORD - 1e-9
+
+
+def test_word_spoken_before_a_join_moves_into_the_previous_segment():
+    # 011812-c1: "a" aligned at source 9.83 (segment 2) but spoken at output 9.74, the tail of segment 1
+    segs = [(0.0, 10.0, 0.0), (10.0, 14.0, 10.0)]
+    words = [_w("proposes", 8.0, 9.0), _w("a", 10.3, 10.45), _w("completely", 10.6, 11.2)]
+    heard = [("proposes", 8.0), ("a", 9.55), ("completely", 10.6)]
+    env = _env(15, [(7.9, 9.0), (9.5, 9.8), (10.55, 11.3)])
+    out, moved = _retime(words, segs, heard, bias=0.07, env=env)
+    assert out[1]["s"] < 10.0
+    assert any(m.startswith("a@") for m in moved)

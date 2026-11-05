@@ -68,7 +68,7 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
     occ = output_occurrences(words, segments)
     cap = [(words[i]["w"], t) for i, _k, t in occ]
     cur = {(i, k): [words[i]["s"], words[i]["e"]] for i, k, _t in occ}  # (word, segment) -> new [s, e]
-    moved, touched = [], set()
+    moved, touched, crossed = [], set(), set()
     for ci, hj in pair_with_leftovers(cap, heard):
         i, k, t_cap = occ[ci]
         t_heard, mark = heard[hj][1], ""
@@ -84,13 +84,22 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
             w = words[i]
             new_s = w["s"] - (diff - bias)
             # build_ass captions a word only if it starts inside its segment and its middle is inside too. A word
-            # moved out of its segment (whisper heard it in the neighbouring segment's output span) would
-            # vanish from the captions and leave a hole under speech: keep its aligned time instead.
-            if not seg_s - 0.02 <= new_s <= seg_e:
-                continue
+            # moved out of its segment would vanish and leave a hole under speech. If it landed in the NEIGHBOUR
+            # segment (the aligner put it past a cut, the speaker said it before it: "a" at a join), it moves there
+            # (single-occurrence words only); otherwise it keeps its aligned time.
             dur = min(w["e"] - w["s"], MAX_MOVED_DUR)  # aligned durations after fillers are inflated (incident: 1.1 s)
-            cur[(i, k)] = [new_s, min(new_s + dur, seg_e)]
-            touched.add((i, k))
+            if seg_s - 0.02 <= new_s <= seg_e:
+                cur[(i, k)] = [new_s, min(new_s + dur, seg_e)]
+                touched.add((i, k))
+            else:
+                k2 = next((j for j in (k - 1, k + 1) if 0 <= j < len(segments)
+                           and segments[j][0] - 0.02 <= new_s <= segments[j][1]), None)
+                if k2 is None or sum(1 for _i, _k, _t in occ if _i == i) != 1:
+                    continue
+                cur.pop((i, k))
+                cur[(i, k2)] = [new_s, min(new_s + dur, segments[k2][1])]
+                touched.add((i, k2))
+                crossed.add((i, k2))
             moved.append(f"{w['w']}@{t_cap:.2f}->{t_heard:.2f}{mark}")
     # A moved word keeps its (shifted) duration, but the heard word often lasts longer: hold it until the next
     # word of the same segment starts when the gap is small, or the caption leaves a hole under speech.
@@ -98,7 +107,7 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
         if env is None:
             order = sorted((key for key in cur if key[1] == k), key=lambda key: cur[key][0])
         else:  # spoken order is the aligned order: a snap never swaps words
-            order = sorted((key for key in cur if key[1] == k), key=lambda key: words[key[0]]["s"])
+            order = sorted((key for key in cur if key[1] == k), key=lambda key: cur[key][0] if key in crossed else words[key[0]]["s"])
             for a, b in zip(order, order[1:]):
                 if b in touched and cur[b][0] < cur[a][0] + MIN_WORD:
                     new_s = min(cur[a][0] + MIN_WORD, seg_e)
