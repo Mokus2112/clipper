@@ -769,6 +769,28 @@ def montage_fades(i: int, n: int) -> tuple[float, float]:
             MONTAGE_EDGE_FADE if i == n - 1 else MONTAGE_CUT_FADE)
 
 
+FADE_IN_MIN = 0.005     # s, fade in when speech is already playing at the cut (just enough to avoid a click)
+
+
+def adaptive_fade_in(audio_fn, s: float, default: float = AUDIO_FADE_IN, floor: float = FADE_IN_MIN) -> float:
+    """Fade-in length for a segment starting at source time s.
+
+    The default fade is for a cut in silence. When the first word's onset falls inside it, a fixed
+    40 ms fade eats the start of the word (-31 dB at 20 ms), so the fade is shortened to end where
+    the sound starts (10 ms resolution, never below `floor`).
+    """
+    import numpy as np
+    if audio_fn is None:
+        return default
+    a = audio_fn(s, default + 0.01)
+    step = 160  # 10 ms at 16 kHz
+    for k in range(0, max(len(a) // step, 0)):
+        w = a[k * step:(k + 1) * step]
+        if len(w) and 20 * np.log10(np.sqrt(np.mean(w ** 2)) + 1e-9) > SILENCE_DB:
+            return min(max(k * 0.01, floor), default)
+    return default
+
+
 def audio_chain(idx: int, fi: float, fo: float, dur: float, a_dur: float) -> str:
     """Per-segment audio filter: fades at both cut edges, padded/trimmed to the exact output length."""
     return (f"[{idx}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
@@ -1682,6 +1704,8 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             a_dur = n_out / float(rc["fps"]) if layout != "shots" and rc["fps"] else nframes[i] / fps
             if source.get("montage"):
                 fi, fo = montage_fades(i, len(segments))  # music montage: fade the bed at the clip edges only
+            else:
+                fi = adaptive_fade_in(audio_fn, s)  # speech already playing at the cut: short fade, the first word keeps its onset
             graph.append(audio_chain(len(segments) + i if wav_audio else i, fi, fo, dur, a_dur) + f"[a{i}]")
             concat += f"[l{i}][a{i}]"
         # loudnorm alone let true peaks reach -0.7 dBFS; limiter at -3 dBFS leaves room for AAC overshoot (~1.5 dB).
