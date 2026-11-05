@@ -313,3 +313,15 @@ def test_collapsed_word_is_not_trusted_just_because_an_onset_sits_at_its_aligned
     out, moved = _retime(words, segs, heard, bias=0.07, env=env)
     assert out[1]["s"] < 10.0
     assert any(m.startswith("a@") for m in moved)
+
+
+def test_word_heard_before_a_cut_is_mapped_through_the_segments_not_shifted_in_source_time():
+    # 053348-c2: "where" aligned 0.1 s after the cut (out 4.1) but spoken at 3.7, at the end of the previous
+    # segment. A source-time shift (-0.4) lands inside the 0.5 s of dropped source and the word stayed late.
+    segs = [(0.0, 4.0, 0.0), (4.5, 8.0, 4.0)]
+    words = [_w("control", 2.5, 3.2), _w("where", 4.6, 4.8), _w("technology", 4.7, 5.5)]
+    heard = [("control", 2.5), ("where", 3.7), ("technology", 4.2)]
+    env = _env(15, [(2.4, 3.4), (3.6, 3.95), (4.5, 5.5)])
+    out, moved = _retime(words, segs, heard, bias=0.07, env=env)
+    assert any(m.startswith("where@") for m in moved)
+    assert out[1]["s"] < 4.0

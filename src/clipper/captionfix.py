@@ -136,6 +136,17 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
             else:
                 k2 = next((j for j in (k - 1, k + 1) if 0 <= j < len(segments)
                            and segments[j][0] - 0.02 <= new_s <= segments[j][1]), None)
+                if k2 is None:
+                    # The shift above is in source time, but a cut between the segments drops source seconds: the
+                    # heard OUTPUT time is the truth (053348 c2: "where" heard 3.76 at the end of the previous segment,
+                    # aligned 0.4 s past the cut). Map it back through the neighbour segment.
+                    t_out = t_heard + bias
+                    for j in (k - 1, k + 1):
+                        if env is not None and 0 <= j < len(segments) and _speech_between(env, t_out, t_out + 0.1):
+                            sj_s, sj_e, off_j = segments[j]
+                            if off_j - 0.02 <= t_out <= off_j + (sj_e - sj_s):
+                                k2, new_s = j, sj_s + (t_out - off_j)
+                                break
                 if k2 is None or (i, k2) in cur:
                     continue
                 cur.pop((i, k))
