@@ -32,3 +32,9 @@ def test_layout_filter_applies_pad_only_with_source():
     assert "boxblur" in f and "overlay=0:" in f
     plain = layout_filter(CFG, INFO, "center", 0.5, None, "z0", "l0", source=SRC, face_top=300 / 1920)
     assert "boxblur" not in plain
+
+
+def test_layout_filter_pads_without_campaign_source_too():
+    # Alliance has no campaign_url, so render passes source=None: the margin must still apply.
+    f = layout_filter(CFG, INFO, "center", 0.5, None, "z0", "l0", source=None, face_top=170 / 1920)
+    assert "boxblur" in f

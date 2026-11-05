@@ -250,7 +250,7 @@ def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam:
     ch = even(sh * crop_h)
     # Face-tracked crop: a close-up whose face top rides above the top UI zone gets a blurred top margin
     # (smaller zoom) so the face top lands >= CROP_FACE_TOP_MIN px. The QA limit itself stays untouched.
-    if src and face_top is not None:
+    if face_top is not None:
         top_pad = max(top_pad, face_top_pad(face_top, sh, ch, H))
     fg_h = H - top_pad
     cw = min(sw, even(ch * W / fg_h))
