@@ -756,6 +756,8 @@ def merge_punct(words: list[dict]) -> list[dict]:
 _PROFANITY = re.compile(r"(?i)\b(motherf|f)u(ck\w*)|(?<![a-z])((?:bull)?sh)i(t\w*)|\b(b)i(tch\w*)|\b(c)u(nt\w*)")
 
 
+FADE_START_ALPHA = 51   # ASS alpha of a caption line at its first frame (0 opaque, 255 transparent): 80% visible
+FADE_HOLD_MS = 999999   # \\fade t3/t4: no fade-out
 AUDIO_FADE_IN = 0.04    # s, fade in at the start of every segment (card D: 40 ms on both edges; SNAP_PRE leaves 90 ms of pre-roll)
 AUDIO_FADE_OUT = 0.05   # s, fade out at the end of every segment (Whisper word ends run early)
 
@@ -862,6 +864,7 @@ def audio_chain(idx: int, fi: float, fo: float, dur: float, a_dur: float) -> str
     return (f"[{idx}:a:0]afade=t=in:st=0:d={fi},afade=t=out:st={max(dur - fo, 0):.4f}:d={fo},"
             f"apad=whole_dur={a_dur:.6f},asetpts=PTS-STARTPTS,atrim=end={a_dur:.6f}")
 SNAP_PRE = 0.09         # s of pre-roll before the first word, never before the previous word's end
+END_TAIL = 0.5          # s of room after the end of the speech at the clip's end (klip template); main segment only
 SNAP_POST = 0.22        # s of tail after the last word, never past the next word's start - 0.05
 
 
@@ -936,7 +939,7 @@ def level_db(audio_fn, t0: float, dur: float) -> float:
 
 def snap_to_words(words: list[dict], start: float, end: float, sentence_end: bool = False,
                   max_trim: float | None = None, audio_fn=None, timed: list[dict] | None = None,
-                  end_tol: float = 0.3) -> tuple[float, float]:
+                  end_tol: float = 0.3, tail: float = 0.0) -> tuple[float, float]:
     """Snap a segment to word boundaries so a cut never lands mid-word.
 
     Start: beginning of the first word starting at or after start-0.05.
@@ -1039,7 +1042,27 @@ def snap_to_words(words: list[dict], start: float, end: float, sentence_end: boo
                     if level_db(audio_fn, t_ - 0.025, 0.05) <= END_QUIET_DB and level_db(audio_fn, t_ - 0.06, 0.06) <= -40.0:
                         e1 = t_
                         break
+    if tail and audio_fn is not None:
+        e1 = extend_tail(audio_fn, e1, tail, nxt["s"] - 0.05 if nxt else None)
     return round(s0, 3), round(e1, 3)
+
+
+def extend_tail(audio_fn, e1: float, tail: float, limit: float | None = None) -> float:
+    """Move a clip end (already in silence, ~30 ms after the speech) so that about `tail` s of room follow the speech.
+
+    The new end is the latest point <= e1 + tail - 0.03 (and <= limit, 50 ms before the next word) that is
+    real quiet by the same test as the end snap (last 60 ms <= END_QUIET_DB and 50 ms centred <= END_QUIET_DB),
+    so a breath or the next sentence's first sound never ends up in the tail. No such point: e1 unchanged.
+    """
+    target = e1 + tail - 0.03
+    if limit is not None:
+        target = min(target, limit)
+    t_ = target
+    while t_ > e1 + 0.005:
+        if level_db(audio_fn, t_ - 0.025, 0.05) <= END_QUIET_DB and level_db(audio_fn, t_ - 0.06, 0.06) <= END_QUIET_DB:
+            return t_
+        t_ -= 0.01
+    return e1
 
 
 EDGE_CUT = 0.25     # s; camera cuts this close to a segment edge become the edge
@@ -1402,7 +1425,10 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
                     on, off_ = f"{{\\c{cc['highlight']}}}", f"{{\\c{cc['color']}}}"
                 parts = [f"{on}{t}{off_}" if j == i else t for j, t in enumerate(texts)]
                 # No fade on a line shorter than 0.2 s or a first word shown < 0.2 s: it would spend most of its frames half-transparent.
-                fade_tag = f"\\fad({fade},0)" if fade and chunk_t1 - chunk_t0 >= 0.2 and t1 - t0 >= 0.2 else ""
+                # The fade starts at 80% opacity (FADE_START_ALPHA 51/255 transparent): from 0% the grey sentence
+                # (#C8C8C8) was close to invisible for the first ~2 frames of every line (reviewer #1638).
+                fade_tag = (f"\\fade({cc.get('fade_start_alpha', FADE_START_ALPHA)},0,0,0,{fade},{FADE_HOLD_MS},{FADE_HOLD_MS})"
+                            if fade and chunk_t1 - chunk_t0 >= 0.2 and t1 - t0 >= 0.2 else "")
                 for a, b, yy in placed(t0 - seg_s + off, t1 - seg_s + off):
                     if b - a < 0.05:
                         continue  # a sliver flashes one frame at a cut, lit during silence
@@ -1554,7 +1580,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             clip = {**clip, "words": words}
         tol = 0.02 if clip.get("quotes") else 0.3
         main = snap_to_words(raw_words, clip["start"], clip["end"], sentence_end=True, max_trim=1.5,
-                             audio_fn=audio_fn, timed=words, end_tol=tol)
+                             audio_fn=audio_fn, timed=words, end_tol=tol, tail=END_TAIL)
         cold = (clip.get("payoff_start"), clip.get("payoff_end"))
         if cold[0] is not None:
             cold = snap_to_words(raw_words, cold[0], cold[1], sentence_end=True, audio_fn=audio_fn, timed=words,
@@ -1846,6 +1872,9 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         cmd = [
             tool("ffmpeg"), "-v", "error", "-y", *inputs, "-filter_complex", ";".join(graph),
             "-map", "[v]", "-map", "[a]",
+            # The source's QuickTime chapter track ('text', SubtitleHandler) came through as a bin_data stream in short.mp4;
+            # -dn alone does not drop it, -map_chapters -1 does (checked with ffprobe).
+            "-map_chapters", "-1", "-dn",
             "-r", rc["fps"], "-c:v", "libx264", "-preset", rc["preset"], "-crf", rc["crf"], "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
         ]

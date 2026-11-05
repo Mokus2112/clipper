@@ -41,7 +41,7 @@ def test_caption_lines_fit_measured_width():
 def test_fade_only_on_first_event_of_a_line_and_no_overlap():
     clip = {"words": words("one two three four five six")}
     lines = caps(build_ass(CFG, clip, [(0.0, 10.0, 0.0)], "center", None, FONTS))
-    fades = [l for l in lines if "\\fad(" in l]
+    fades = [l for l in lines if "\\fade(" in l]
     texts = [re.sub(r"\{[^}]*\}", "", l.split(",", 9)[9]) for l in lines]
     assert len(fades) == len(set(texts))  # one fade per caption line
     spans = sorted((secs(l.split(",")[1]), secs(l.split(",")[2])) for l in lines)
@@ -92,3 +92,20 @@ def test_no_fade_on_short_chunk_and_short_words_merge():
     for l in lines:
         d = secs(l.split(",")[2]) - secs(l.split(",")[1])
         assert d >= 4 / 30 - 0.011  # no 1-3 frame flashes
+
+
+def test_caption_fade_starts_visible_not_transparent():
+    clip = {"words": words("one two three four five six")}
+    ass = build_ass(CFG, clip, [(0.0, 10.0, 0.0)], "center", None, FONTS)
+    assert "\\fad(" not in ass
+    m = re.search(r"\\fade\((\d+),0,0,0,(\d+),", ass)
+    assert m and int(m.group(1)) <= 0.25 * 255            # at least 75% opaque at the first frame
+    assert int(m.group(2)) == CFG["captions"]["fade_ms"]   # same fade length as before
+
+
+def test_fade_start_alpha_can_be_set_in_config():
+    import copy
+    cfg = copy.deepcopy(CFG)
+    cfg["captions"]["fade_start_alpha"] = 0
+    ass = build_ass(cfg, {"words": words("one two three four five six")}, [(0.0, 10.0, 0.0)], "center", None, FONTS)
+    assert "\\fade(0,0,0,0," in ass
