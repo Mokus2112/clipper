@@ -301,3 +301,15 @@ def test_stacked_word_is_placed_on_the_burst_between_the_two_words():
     occ = [(0, 0, 9.0), (1, 0, 9.76), (2, 0, 9.80)]
     _spread_collapsed(cur, occ, segs, env, 0.0)
     assert 9.30 <= cur[(1, 0)][0] <= 9.45 and cur[(2, 0)][0] == 9.80
+
+
+def test_collapsed_word_is_not_trusted_just_because_an_onset_sits_at_its_aligned_time():
+    # 011345-c1: "a" aligned 20 ms long right where "completely" bursts; "a" was spoken 0.4 s earlier. The
+    # "already on an onset" shortcut left 0.7 s of speech uncaptioned.
+    segs = [(0.0, 10.0, 0.0), (10.0, 14.0, 10.0)]
+    words = [_w("proposes", 8.0, 9.0), _w("a", 10.3, 10.32), _w("completely", 10.33, 11.2)]
+    heard = [("proposes", 8.0), ("a", 9.55), ("completely", 10.33)]
+    env = _env(15, [(7.9, 9.0), (9.5, 9.8), (10.3, 11.3)])
+    out, moved = _retime(words, segs, heard, bias=0.07, env=env)
+    assert out[1]["s"] < 10.0
+    assert any(m.startswith("a@") for m in moved)

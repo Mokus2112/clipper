@@ -105,7 +105,8 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
         if collided and prev_skipped:
             continue
         prev_skipped = True
-        if env is not None and energy_onset(env, t_cap, ON_ONSET, ON_ONSET) is not None:
+        collapsed = words[i]["e"] - words[i]["s"] < COLLAPSED_DUR  # a 20 ms "a": its time is aligner noise, any onset at it is the NEXT word's
+        if env is not None and not collapsed and energy_onset(env, t_cap, ON_ONSET, ON_ONSET) is not None:
             # The caption already sits on a speech onset (chip-roy c1: "And," at 8.94, burst at 8.93): a heard start
             # that is a long way off is whisper noise, and snapping it to another onset would move a correct word.
             continue
@@ -205,6 +206,7 @@ def _speech_run_start(env: np.ndarray, t0: float, t1: float, dip: float = 0.06) 
     return start
 
 
+COLLAPSED_DUR = 0.05  # s: an aligned word this short has no real timing (forced aligner stacked it on a neighbour)
 COLLAPSE_MAX = 0.06   # s: two neighbouring caption words starting this close are a collapsed pair, not two words
 COLLAPSE_GAP = 0.16   # s: the earlier word of a collapsed pair is put this far before the later one
 
