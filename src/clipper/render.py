@@ -1706,7 +1706,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             clip = {**clip, "words": words}
         tol = 0.02 if clip.get("quotes") else 0.3
         main = snap_to_words(raw_words, clip["start"], clip["end"], sentence_end=True, max_trim=1.5,
-                             audio_fn=audio_fn, timed=words, end_tol=tol, tail=END_TAIL)
+                             audio_fn=audio_fn, timed=words, end_tol=tol, tail=clip.get("end_tail", END_TAIL))
         cold = (clip.get("payoff_start"), clip.get("payoff_end"))
         if cold[0] is not None:
             cold = snap_to_words(raw_words, cold[0], cold[1], sentence_end=True, audio_fn=audio_fn, timed=words,
