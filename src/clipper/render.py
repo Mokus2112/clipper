@@ -625,17 +625,32 @@ def chunk_words(words: list[dict], max_words: int, max_sec: float,
         cur.append(w)
     if cur:
         chunks.append(cur)
-    # A chunk on screen for less than MIN_CAPTION_SEC only flashes: merge it into a neighbour,
-    # but never past max_words (a merged 6-word line overflowed the safe width, 080536-c2).
-    merged: list[list[dict]] = []
-    for ch in chunks:
-        ok = (bool(merged) and len(merged[-1]) + len(ch) <= max_words and ch[0]["s"] - merged[-1][-1]["e"] <= 0.6
-              and fits(merged[-1] + ch))
-        if ok and (ch[-1]["e"] - ch[0]["s"] < MIN_CAPTION_SEC or merged[-1][-1]["e"] - merged[-1][0]["s"] < MIN_CAPTION_SEC):
-            merged[-1] = merged[-1] + ch
-        else:
-            merged.append(ch)
-    return merged
+    # A chunk on screen for less than MIN_CAPTION_SEC only flashes: merge it into a neighbour (previous first). The
+    # pixel check always applies; max_words may be exceeded by one for a flash chunk (a merged 6-word line overflowed
+    # the safe width, 080536-c2, hence only +1 and only when fits() agrees).
+    def dur(ch):
+        return ch[-1]["e"] - ch[0]["s"]
+
+    def can(a, b, extra):
+        return len(a) + len(b) <= max_words + extra and b[0]["s"] - a[-1]["e"] <= 0.6 and fits(a + b)
+
+    chunks = [list(c) for c in chunks]
+    for extra in (0, 1):
+        i = 0
+        while i < len(chunks):
+            ch = chunks[i]
+            prev_ok = i > 0 and can(chunks[i - 1], ch, extra)
+            next_ok = i + 1 < len(chunks) and can(ch, chunks[i + 1], extra)
+            prev_short = i > 0 and dur(chunks[i - 1]) < MIN_CAPTION_SEC
+            if prev_ok and (dur(ch) < MIN_CAPTION_SEC or prev_short):
+                chunks[i - 1] = chunks[i - 1] + ch
+                del chunks[i]
+            elif next_ok and dur(ch) < MIN_CAPTION_SEC:
+                chunks[i] = ch + chunks[i + 1]
+                del chunks[i + 1]
+            else:
+                i += 1
+    return chunks
 
 
 MIN_CAPTION_SEC = 0.25
@@ -1498,7 +1513,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 out_audio = output_audio(seg_wav, wav_t0, segments)
                 heard = heard_in_output(seg_wav, wav_t0, segments, out_audio)
                 fixed, moved = retime_words(cw, segments, heard, bias=cfg["captions"].get("sync_shift", 0.07),
-                                            env=envelope_db(out_audio))
+                                            env=envelope_db(out_audio), audio=out_audio)
                 import json as _json
                 (cdir / "retime.json").write_text(_json.dumps(
                     {"segments": segments, "caption": [(w["w"], w["s"]) for w in cw], "heard": heard, "moved": moved}))

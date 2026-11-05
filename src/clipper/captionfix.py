@@ -75,7 +75,7 @@ def _speech_run_end(env: np.ndarray, t0: float, t1: float, dip: float = 0.06) ->
 
 def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
                  heard: list[tuple[str, float]], bias: float = 0.0,
-                 env: np.ndarray | None = None) -> tuple[list[dict], list[str]]:
+                 env: np.ndarray | None = None, audio: np.ndarray | None = None) -> tuple[list[dict], list[str]]:
     """words: caption words (source time); heard: whisper (text, output start) of the finished audio.
     bias: build_ass later shifts every word earlier by sync_shift, so a moved word is placed at heard + bias.
     Returns the words with grossly misplaced starts moved to the heard start, and a log line per moved word.
@@ -83,7 +83,9 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
     within SNAP_WINDOW (whisper starts are only good to ~+-0.5 s), word order is kept with MIN_WORD spacing, and a
     short gap with speech energy is closed (HOLE_MAX). Without a nearby onset the whisper time stays (log: "~").
     Each occurrence is timed on its own: a word replayed in two segments gets a per-segment override
-    w["ov"] = {segment index: (s, e)} that build_ass uses for that segment (its base s/e stay the source time)."""
+    w["ov"] = {segment index: (s, e)} that build_ass uses for that segment (its base s/e stay the source time).
+    audio: optional output audio (16 kHz). With it the first caption of every segment is moved to the real speech onset
+    when the cut leaves 120-300 ms of silence in front of it (see _onset_pass)."""
     occ = output_occurrences(words, segments)
     cap = [(words[i]["w"], t) for i, _k, t in occ]
     cur = {(i, k): [words[i]["s"], words[i]["e"]] for i, k, _t in occ}  # (word, segment) -> new [s, e]
@@ -153,6 +155,8 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
                 cur[a][1] = min(cur[b][0], seg_e)
     if env is not None:
         _close_joins(cur, segments, env)
+    if audio is not None:
+        moved += _onset_pass(cur, words, segments, audio, bias)
     out = [dict(w) for w in words]
     for i, w in enumerate(out):
         ks = [k for (j, k) in cur if j == i]
@@ -207,6 +211,77 @@ def _close_joins(cur: dict, segments: list[tuple[float, float, float]], env: np.
         st = _speech_run_start(env, max(join, ea), sb)
         if sb - st >= 0.08:
             cur[b][0] = max(st - 0.03 + ns - no, ns)
+
+
+ONSET_SEARCH = 0.30   # s: the onset is looked for at most this far after the lit time; none found -> start unchanged
+ONSET_REL_DB = 22.0   # dB below the clip's speech level (p90 of the 20 ms curve) that counts as speech
+ONSET_FLOOR_DB = -50.0
+ONSET_PUSH_MAX = 0.07   # the next word may be pushed this far later (QA tolerates 80 ms)
+ONSET_MIN_WORD = 0.04   # a short function word ("to") may start only ~90 ms before the next word
+
+
+def db_curve20(a: np.ndarray) -> np.ndarray:
+    """The same curve qa._db_curve reads: 20 ms RMS window, 10 ms hop, dB (index i describes [i*10 ms, +20 ms])."""
+    n = max(len(a) - 320, 0)
+    if n == 0:
+        return np.zeros(0)
+    idx = np.arange(0, n, 160)
+    sq = np.concatenate([[0.0], np.cumsum(a.astype(np.float64) ** 2)])
+    ms = (sq[np.minimum(idx + 320, len(a))] - sq[idx]) / 320.0
+    return 10 * np.log10(ms + 1e-18)
+
+
+def onset_threshold(db: np.ndarray) -> float:
+    """Relative speech threshold: 22 dB under the clip's speech level (p90), never above QA's -35 dB, never below -50."""
+    if not len(db):
+        return -35.0
+    return float(min(-35.0, max(ONSET_FLOOR_DB, np.percentile(db, 90) - ONSET_REL_DB)))
+
+
+def _onset_pass(cur: dict, words: list[dict], segments: list[tuple[float, float, float]], audio: np.ndarray,
+                bias: float) -> list[str]:
+    """The first caption of a segment sits at the aligner start, which after a cut can be 120-150 ms before the
+    speech (QA: 'lights up during silence'). Measure the onset on the finished audio with QA's own curve and a
+    threshold relative to the clip's speech level; search at most ONSET_SEARCH forward. No onset -> unchanged, logged."""
+    db = db_curve20(audio)
+    if not len(db):
+        return []
+    thr = onset_threshold(db)
+    log = []
+    for k, (ss, se, so) in enumerate(segments):
+        keys = [key for key in cur if key[1] == k]
+        if not keys:
+            continue
+        key = min(keys, key=lambda kk: cur[kk][0])
+        s, e = cur[key]
+        lit = s - ss + so - bias   # output time the highlight starts (build_ass shifts by sync_shift)
+        if lit < so - bias - 1e-6 or lit > so + (se - ss):
+            continue
+        i0 = max(int(round((lit - 0.03) / HOP)), int(np.ceil(so / HOP)), 0)   # frames of the previous segment do not count
+        i1 = min(int(round((lit + 0.04) / HOP)) + 1, len(db))   # speech must already be there, not 100 ms ahead
+        i1 = max(i1, i0 + 4)   # the highlight leads the join by the bias: look at the first frames after the cut
+        if i1 > len(db) or db[i0:i1].max() >= thr:
+            continue   # speech already under the highlight
+        j1 = min(int(round((lit + ONSET_SEARCH) / HOP)) + 1, len(db))
+        hit = next((j for j in range(i1, j1) if db[j] >= thr), None)
+        name = words[key[0]]["w"]
+        if hit is None:
+            log.append(f"onset-none:{name}@{lit:.2f}")
+            continue
+        ons = hit * HOP
+        new_s = ons - so + ss + bias
+        others = [kk for kk in keys if kk != key]
+        if others:
+            nk = min(others, key=lambda kk: cur[kk][0])
+            need = new_s + ONSET_MIN_WORD + 0.02   # a short word ("to") sits right in front of the next one
+            if need > cur[nk][0]:
+                if need - cur[nk][0] > ONSET_PUSH_MAX or need > cur[nk][1] + ONSET_PUSH_MAX:
+                    log.append(f"onset-blocked:{name}@{lit:.2f}")
+                    continue
+                cur[nk] = [need, max(cur[nk][1], need + MIN_WORD)]
+        cur[key] = [new_s, min(max(e, new_s + ONSET_MIN_WORD), se)]
+        log.append(f"onset:{name}@{lit:.2f}>{ons:.2f}")
+    return log
 
 
 def output_audio(wav, wav_t0: float, segments: list[tuple[float, float, float]]) -> np.ndarray:

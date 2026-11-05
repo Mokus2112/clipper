@@ -31,3 +31,11 @@ def test_wide_line_splits_by_pixels():
     assert all(fits(c) or len(c) == 1 for c in chunks)
     assert [len(c) for c in chunks][:1] == [1] or [len(c) for c in chunks][:1] == [2]
     assert [x["w"] for c in chunks for x in c] == [x["w"] for x in words]
+
+
+def test_flash_chunk_of_0_13s_merges_into_a_neighbour_even_at_max_words():
+    w = lambda t, s, e: {"w": t, "s": s, "e": e}  # noqa: E731
+    words = [w("a", 0.0, 0.3), w("b", 0.3, 0.6), w("c", 0.6, 0.9), w("d", 0.95, 1.08), w("e", 1.5, 1.9)]
+    chunks = chunk_words(words, 3, 1.4)
+    assert all(ch[-1]["e"] - ch[0]["s"] >= 0.25 for ch in chunks), chunks
+    assert [x["w"] for ch in chunks for x in ch] == list("abcde")

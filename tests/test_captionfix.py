@@ -206,3 +206,37 @@ def test_join_hole_in_silence_stays_open():
     env = _env(24, [(7.0, 8.1), (8.5, 9.5)])
     out, _ = _retime(words, segs, [], env=env)
     assert out[0]["e"] < 18.3 and out[1]["s"] > 30.0
+
+
+# --- onset pass on the finished audio (Codee #953) ---
+def _audio(n_s, speech, sr=16000):
+    """White-ish noise at -20 dB inside the (start, end) output spans, near-silence elsewhere."""
+    rng = np.random.default_rng(0)
+    a = (1e-4 * rng.standard_normal(int(n_s * sr))).astype(np.float32)
+    for s0, e0 in speech:
+        a[int(s0 * sr):int(e0 * sr)] = 0.1 * rng.standard_normal(int(e0 * sr) - int(s0 * sr))
+    return a
+
+
+def test_caption_after_a_join_waits_for_the_onset_150ms_later():
+    # cut at output 8.5, speech starts 150 ms later: the first caption of segment 1 lights at the onset, not the cut
+    segs = [(10.0, 18.5, 0.0), (30.0, 45.0, 8.5)]
+    words = [_w("a", 17.0, 18.07), _w("b", 30.0, 30.6)]
+    out, moved = _retime(words, segs, [], bias=0.07, audio=_audio(24, [(7.0, 8.3), (8.65, 10.0)]))
+    assert abs((out[1]["s"] - 0.07 - 30.0 + 8.5) - 8.65) < 0.02, out[1]
+    assert any(m.startswith("onset:b") for m in moved)
+
+
+def test_no_onset_within_300ms_keeps_the_original_start_and_logs():
+    segs = [(10.0, 18.5, 0.0), (30.0, 45.0, 8.5)]
+    words = [_w("a", 17.0, 18.07), _w("b", 30.0, 30.6)]
+    out, moved = _retime(words, segs, [], bias=0.07, audio=_audio(24, [(7.0, 8.3), (9.0, 10.0)]))
+    assert out[1]["s"] == 30.0
+    assert any(m.startswith("onset-none:b") for m in moved)
+
+
+def test_caption_already_on_speech_is_not_touched():
+    segs = [(10.0, 18.5, 0.0)]
+    words = [_w("a", 10.5, 11.0)]
+    out, moved = _retime(words, segs, [], bias=0.07, audio=_audio(9, [(0.4, 3.0)]))
+    assert out[0]["s"] == 10.5 and moved == []
