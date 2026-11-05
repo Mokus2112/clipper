@@ -13,6 +13,7 @@ from .syncmeter import HOP, _norm, energy_onset, pair
 RETIME_MIN = 0.20   # s: smaller differences are the forced aligner's normal noise, left alone
 MAX_MOVED_DUR = 0.45  # s: a moved word's length is capped so its midpoint stays inside its segment
 RETIME_MAX = 1.00   # s: a larger difference is a mismatched word, not a timing error
+ON_ONSET = 0.06    # s: a caption this close to an audio-energy onset is already on its word
 SNAP_WINDOW = 0.30  # s: a whisper start is snapped to the nearest audio-energy onset only within this window
 MIN_WORD = 0.08     # s: a snapped word never starts closer than this to the previous word of its segment
 HOLE_MAX = 0.40     # s: a gap this short with speech energy in it is closed by holding the previous caption
@@ -90,9 +91,25 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
     cap = [(words[i]["w"], t) for i, _k, t in occ]
     cur = {(i, k): [words[i]["s"], words[i]["e"]] for i, k, _t in occ}  # (word, segment) -> new [s, e]
     moved, touched, crossed, dropped = [], set(), set(), set()
-    for ci, hj in pair_with_leftovers(cap, heard):
+    prev_heard, prev_skipped = -9.0, False
+    for ci, hj in sorted(pair_with_leftovers(cap, heard)):
         i, k, t_cap = occ[ci]
         t_heard, mark = heard[hj][1], ""
+        if words[i].get("fill"):
+            continue  # inserted from the heard audio by repair_words: already at its heard time
+        # Whisper on the finished audio sometimes gives two neighbouring words the same start ("And" and "I" both
+        # 9.2 s). When the first of them was left alone, the collapsed start says nothing about the second: it keeps
+        # its aligned time (if the first did move, the second is placed after it by the MIN_WORD spacing below).
+        collided = heard[hj][1] < prev_heard + MIN_WORD
+        prev_heard = max(prev_heard, heard[hj][1])
+        if collided and prev_skipped:
+            continue
+        prev_skipped = True
+        if env is not None and energy_onset(env, t_cap, ON_ONSET, ON_ONSET) is not None:
+            # The caption already sits on a speech onset (chip-roy c1: "And," at 8.94, burst at 8.93): a heard start
+            # that is a long way off is whisper noise, and snapping it to another onset would move a correct word.
+            continue
+        prev_skipped = False
         if env is not None:
             on = energy_onset(env, t_heard, SNAP_WINDOW, SNAP_WINDOW)
             if on is not None and abs(on - t_heard) <= SNAP_WINDOW:
@@ -104,6 +121,9 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
             seg_s, seg_e = segments[k][:2]
             w = words[i]
             new_s = w["s"] - (diff - bias)
+            nxt = next((occ[c2] for c2 in range(ci + 1, len(occ)) if occ[c2][1] == k), None)
+            if nxt is not None and new_s > words[nxt[0]]["s"] - MIN_WORD and new_s > w["s"]:
+                continue  # moving later must not jump over the next word (chip-roy c1: "would" past "say,")
             # build_ass captions a word only if it starts inside its segment and its middle is inside too. A word
             # moved out of its segment would vanish and leave a hole under speech. If it landed in the NEIGHBOUR
             # segment (the aligner put it past a cut, the speaker said it before it: "a" at a join), it moves there
@@ -153,6 +173,7 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
             if closing:
                 # never past the end of the segment: the middle would leave it and build_ass drops the word
                 cur[a][1] = min(cur[b][0], seg_e)
+    _spread_collapsed(cur, occ)
     if env is not None:
         _close_joins(cur, segments, env)
     if audio is not None:
@@ -182,6 +203,29 @@ def _speech_run_start(env: np.ndarray, t0: float, t1: float, dip: float = 0.06) 
                 break
         i -= 1
     return start
+
+
+COLLAPSE_MAX = 0.06   # s: two neighbouring caption words starting this close are a collapsed pair, not two words
+COLLAPSE_GAP = 0.16   # s: the earlier word of a collapsed pair is put this far before the later one
+
+
+def _spread_collapsed(cur: dict, occ) -> None:
+    """The forced aligner sometimes stacks a short word on its neighbour ("I" 0.04 s before "would"). Nobody speaks
+    two words in 40 ms, so the earlier one is moved back to COLLAPSE_GAP before the later, but never closer than
+    MIN_WORD+0.02 to the word before it."""
+    by_seg: dict[int, list[int]] = {}
+    for i, k, _t in occ:
+        if (i, k) in cur:  # a word retimed into another segment has no entry here
+            by_seg.setdefault(k, []).append(i)
+    for k, idx in by_seg.items():
+        for n in range(1, len(idx)):
+            a, b = (idx[n - 1], k), (idx[n], k)
+            if not (0 <= cur[b][0] - cur[a][0] < COLLAPSE_MAX):
+                continue
+            floor = cur[(idx[n - 2], k)][0] + MIN_WORD + 0.02 if n >= 2 else -1e9
+            new_s = max(cur[b][0] - COLLAPSE_GAP, floor)
+            if new_s < cur[a][0]:
+                cur[a][0] = new_s
 
 
 def _close_joins(cur: dict, segments: list[tuple[float, float, float]], env: np.ndarray) -> None:
@@ -299,3 +343,86 @@ def heard_in_output(wav, wav_t0: float, segments: list[tuple[float, float, float
     segs, _ = WhisperModel("small", device="cpu", compute_type="int8").transcribe(
         audio, language="en", word_timestamps=True)
     return [(w.word, float(w.start)) for s in segs for w in (s.words or [])]
+
+
+FILL_MAX_WORDS = 6   # a run of heard words missing from the transcript is filled in only up to this long
+FILL_MIN_SPAN = 0.30  # s: ... and only when it spans at least this much speech
+
+
+def repair_words(words: list[dict], segments: list[tuple[float, float, float]],
+                 heard: list[tuple[str, float]], env: np.ndarray | None) -> tuple[list[dict], list[str]]:
+    """Fixes of the transcript itself, before retime_words (which only moves words):
+    - "going to" spoken as "gonna" (whisper on the finished audio heard "gonna"): one caption word "gonna", so the
+      caption matches the audio;
+    - a run of words the finished audio has but the transcript lacks (whisper on the full audio and the aligner dropped
+      "If I could say," in chip-roy c1, 14.1-14.6 s, caption gap under speech): inserted, spread over the speech.
+    Returns (words, log lines). Never touches words that pair with a heard word."""
+    occ = output_occurrences(words, segments)
+    cap = [(words[i]["w"], t) for i, _k, t in occ]
+    pairs = pair_with_leftovers(cap, heard)
+    used_h = {h for _c, h in pairs}
+    log: list[str] = []
+    drop: set[int] = set()
+    words = [dict(w) for w in words]
+    # going to -> gonna
+    for hj, (hw, ht) in enumerate(heard):
+        if hj in used_h or _norm(hw) != "gonna":
+            continue
+        for ci in range(len(cap) - 1):
+            i, _k, t = occ[ci]
+            j = occ[ci + 1][0]
+            if (_norm(cap[ci][0]) == "going" and _norm(cap[ci + 1][0]) == "to" and abs(t - ht) <= 0.5
+                    and j == i + 1 and i not in drop):
+                g = words[i]["w"]
+                words[i]["w"] = ("Gonna" if g[:1].isupper() else "gonna") + g[len("going"):].replace("to", "")
+                words[i]["e"] = max(words[i]["e"], words[j]["e"])
+                drop.add(j)
+                log.append(f"going to->gonna@{t:.2f}")
+                break
+    words = [w for i, w in enumerate(words) if i not in drop]
+    if env is None:
+        return words, log
+    # runs of unpaired heard words in a caption gap
+    occ = output_occurrences(words, segments)
+    cap = [(words[i]["w"], t) for i, _k, t in occ]
+    used_h = {h for _c, h in pair_with_leftovers(cap, heard)}
+    cap_t = sorted(t for _w, t in cap)
+    runs, cur_run = [], []
+    for hj in range(len(heard)):
+        if hj not in used_h and (not cur_run or hj == cur_run[-1] + 1):
+            cur_run.append(hj)
+        else:
+            if cur_run:
+                runs.append(cur_run)
+            cur_run = [hj] if hj not in used_h else []
+    if cur_run:
+        runs.append(cur_run)
+    inserts = []
+    for run in runs:
+        t0 = heard[run[0]][1]
+        nxt = next((t for t in cap_t if t > t0 + 0.02), None)
+        prv = max((t for t in cap_t if t <= t0 + 0.02), default=None)
+        t1 = min(heard[run[-1]][1] + 0.30, nxt - 0.02) if nxt is not None else heard[run[-1]][1] + 0.30
+        if len(run) > FILL_MAX_WORDS or t1 - t0 < FILL_MIN_SPAN or any(t0 - 0.12 <= t <= t1 - 0.05 for t in cap_t):
+            continue
+        if prv is not None and t0 - prv > 1.5 or not _speech_between(env, t0, t1, 0.6):
+            continue
+        k = next((k for k, (s, e, off) in enumerate(segments) if off - 0.02 <= t0 <= off + (e - s)), None)
+        if k is None:
+            continue
+        step = (t1 - t0) / len(run)
+        for n, hj in enumerate(run):
+            ts = t0 + n * step
+            ss = segments[k][0] + ts - segments[k][2]
+            inserts.append((prv, {"w": heard[hj][0].strip(), "s": ss, "e": ss + step * 0.9, "fill": True}))
+        log.append(f"filled {' '.join(heard[h][0].strip() for h in run)}@{t0:.2f}")
+    # positions are taken against the original word list, then inserted back to front so earlier indices stay valid
+    placed = []
+    for n, (prv, nw) in enumerate(inserts):
+        pos = 0
+        if prv is not None:
+            pos = 1 + min(occ, key=lambda o: abs(o[2] - prv))[0]
+        placed.append((pos, n, nw))
+    for pos, _n, nw in sorted(placed, key=lambda x: (x[0], x[1]), reverse=True):
+        words.insert(pos, nw)
+    return words, log

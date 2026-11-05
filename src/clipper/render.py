@@ -650,6 +650,16 @@ def chunk_words(words: list[dict], max_words: int, max_sec: float,
                 del chunks[i + 1]
             else:
                 i += 1
+    # Rebalance: a flash chunk whose neighbours are full (3+2 > max_words+1, Chip Roy c1 "IT ALL." 0.23 s) borrows
+    # the neighbour's boundary word instead, so no line flashes: "I WOULD KILL | IT ALL." -> "I WOULD | KILL IT ALL.".
+    for i in range(1, len(chunks)):
+        ch, prev = chunks[i], chunks[i - 1]
+        if dur(ch) >= MIN_CAPTION_SEC or len(prev) < 2 or len(ch) >= max_words:
+            continue
+        moved, rest = prev[-1:], prev[:-1]
+        if (len(ch) + 1 <= max_words and ch[0]["s"] - moved[0]["e"] <= 0.6
+                and dur(rest) >= MIN_CAPTION_SEC and fits(moved + ch)):
+            chunks[i - 1], chunks[i] = rest, moved + ch
     return chunks
 
 
@@ -1507,16 +1517,21 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         if wav_audio and clip.get("words") and cfg["captions"].get("retime_from_audio", True):
             # Forced alignment can sit 0.3-0.6 s off after fillers: move grossly misplaced words to the heard start.
             try:
-                from .captionfix import heard_in_output, output_audio, retime_words
+                from .captionfix import heard_in_output, output_audio, repair_words, retime_words
                 from .syncmeter import envelope_db
                 cw = caption_words(merge_punct(clip["words"]))
                 out_audio = output_audio(seg_wav, wav_t0, segments)
                 heard = heard_in_output(seg_wav, wav_t0, segments, out_audio)
+                env_out = envelope_db(out_audio)
+                cw, repaired = repair_words(cw, segments, heard, env_out)
                 fixed, moved = retime_words(cw, segments, heard, bias=cfg["captions"].get("sync_shift", 0.07),
-                                            env=envelope_db(out_audio), audio=out_audio)
+                                            env=env_out, audio=out_audio)
                 import json as _json
                 (cdir / "retime.json").write_text(_json.dumps(
-                    {"segments": segments, "caption": [(w["w"], w["s"]) for w in cw], "heard": heard, "moved": moved}))
+                    {"segments": segments, "caption": [(w["w"], w["s"]) for w in cw], "heard": heard, "moved": moved, "repaired": repaired}))
+                if repaired:
+                    log(f"{clip['id']}: repaired transcript from the finished audio: {'; '.join(repaired[:8])}")
+                    clip = {**clip, "words": cw}
                 if moved:
                     log(f"{clip['id']}: retimed {len(moved)} caption words from the finished audio: {', '.join(moved[:12])}")
                     clip = {**clip, "words": fixed}

@@ -240,3 +240,35 @@ def test_caption_already_on_speech_is_not_touched():
     words = [_w("a", 10.5, 11.0)]
     out, moved = _retime(words, segs, [], bias=0.07, audio=_audio(9, [(0.4, 3.0)]))
     assert out[0]["s"] == 10.5 and moved == []
+
+
+# Chip Roy c1 (alliance-secure-ai-20261105-035221): numbers taken from its retime.json.
+from clipper.captionfix import repair_words, _spread_collapsed
+
+
+def test_gonna_replaces_going_to_when_the_audio_has_gonna():
+    segs = [(0.0, 40.0, 0.0)]
+    words = [w("not", 32.49, 32.7), w("going", 32.56, 32.7), w("to", 32.7, 32.8), w("flip", 32.87, 33.0)]
+    heard = [("not", 32.49), ("gonna", 32.58), ("flip", 32.87)]
+    out, log = repair_words(words, segs, heard, None)
+    assert [x["w"] for x in out] == ["not", "gonna", "flip"]
+    assert any("gonna" in m for m in log)
+
+
+def test_words_missing_from_the_transcript_are_filled_from_the_audio():
+    segs = [(0.0, 30.0, 0.0)]
+    env = _env(30, [(13.8, 15.0)])
+    words = [w("off.", 13.86, 14.09), w("Oh,", 14.68, 14.78), w("you're", 14.78, 14.84)]
+    heard = [("off", 13.86), ("If", 14.12), ("I", 14.25), ("could", 14.38), ("say", 14.51),
+             ("Oh", 14.68), ("you're", 14.78)]
+    out, log = repair_words(words, segs, heard, env)
+    assert [x["w"] for x in out][:5] == ["off.", "If", "I", "could", "say"]
+    assert abs(out[1]["s"] - 14.12) < 1e-6 and out[1].get("fill")
+
+
+def test_collapsed_pair_is_spread_before_the_later_word():
+    # "I" 9.76 and "would" 9.80 (40 ms apart); the energy rise of "I" is at ~9.64.
+    cur = {(0, 0): [9.36, 9.76], (1, 0): [9.76, 10.01], (2, 0): [9.80, 10.05]}
+    occ = [(0, 0, 9.36), (1, 0, 9.76), (2, 0, 9.80)]
+    _spread_collapsed(cur, occ)
+    assert abs(cur[(1, 0)][0] - 9.64) < 1e-6 and cur[(2, 0)][0] == 9.80

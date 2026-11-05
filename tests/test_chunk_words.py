@@ -39,3 +39,11 @@ def test_flash_chunk_of_0_13s_merges_into_a_neighbour_even_at_max_words():
     chunks = chunk_words(words, 3, 1.4)
     assert all(ch[-1]["e"] - ch[0]["s"] >= 0.25 for ch in chunks), chunks
     assert [x["w"] for ch in chunks for x in ch] == list("abcde")
+
+
+def test_short_last_chunk_takes_a_word_from_a_full_neighbour():
+    # Chip Roy c1: "I WOULD KILL | IT ALL." left a 0.23 s chunk because both neighbours were full.
+    words = [w("I", 1.00, 1.20), w("would", 1.20, 1.40), w("kill", 1.40, 1.66),
+             w("it", 1.66, 1.78), w("all.", 1.78, 1.89)]
+    chunks = chunk_words(words, 3, 1.4)
+    assert [[x["w"] for x in c] for c in chunks] == [["I", "would"], ["kill", "it", "all."]]
