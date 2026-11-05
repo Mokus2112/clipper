@@ -290,3 +290,14 @@ def test_repeated_word_that_is_heard_twice_is_kept():
     heard = [("very", 1.0), ("very", 1.4), ("good", 1.8)]
     out, _log = repair_words(words, segs, heard, None)
     assert [x["w"] for x in out] == ["very", "very", "good"]
+
+
+def test_stacked_word_is_placed_on_the_burst_between_the_two_words():
+    # chip-roy c1: "I" stacked 40 ms before "would"; the audio has "I" as a separate burst 0.3 s earlier
+    # (after a dip), the blind gap would put it at would - 0.16.
+    env = _env(30, [(9.0, 9.2), (9.35, 9.55), (9.75, 10.0)])
+    segs = [(0.0, 30.0, 0.0)]
+    cur = {(0, 0): [9.0, 9.2], (1, 0): [9.76, 10.01], (2, 0): [9.80, 10.05]}
+    occ = [(0, 0, 9.0), (1, 0, 9.76), (2, 0, 9.80)]
+    _spread_collapsed(cur, occ, segs, env, 0.0)
+    assert 9.30 <= cur[(1, 0)][0] <= 9.45 and cur[(2, 0)][0] == 9.80

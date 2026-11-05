@@ -173,7 +173,7 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
             if closing:
                 # never past the end of the segment: the middle would leave it and build_ass drops the word
                 cur[a][1] = min(cur[b][0], seg_e)
-    _spread_collapsed(cur, occ)
+    _spread_collapsed(cur, occ, segments, env, bias)
     if env is not None:
         _close_joins(cur, segments, env)
     if audio is not None:
@@ -209,7 +209,7 @@ COLLAPSE_MAX = 0.06   # s: two neighbouring caption words starting this close ar
 COLLAPSE_GAP = 0.16   # s: the earlier word of a collapsed pair is put this far before the later one
 
 
-def _spread_collapsed(cur: dict, occ) -> None:
+def _spread_collapsed(cur: dict, occ, segments=None, env=None, bias: float = 0.0) -> None:
     """The forced aligner sometimes stacks a short word on its neighbour ("I" 0.04 s before "would"). Nobody speaks
     two words in 40 ms, so the earlier one is moved back to COLLAPSE_GAP before the later, but never closer than
     MIN_WORD+0.02 to the word before it."""
@@ -224,6 +224,15 @@ def _spread_collapsed(cur: dict, occ) -> None:
                 continue
             floor = cur[(idx[n - 2], k)][0] + MIN_WORD + 0.02 if n >= 2 else -1e9
             new_s = max(cur[b][0] - COLLAPSE_GAP, floor)
+            if env is not None and segments is not None:
+                # A real burst between the two words beats the blind gap (chip-roy c1: "I" stacked on "would", the
+                # "I" burst 0.3 s earlier after a dip): take the burst nearest before the later word.
+                ss, _se, off = segments[k]
+                t_b = cur[b][0] - ss + off - bias
+                # window [t_b-0.56, t_b-0.12]: ends before the later word's own burst, which would win otherwise
+                on = energy_onset(env, t_b - 0.34, 0.22, 0.22)
+                if on is not None and on <= t_b - 0.08:
+                    new_s = max(on + bias - off + ss, floor, new_s - 0.4)
             if new_s < cur[a][0]:
                 cur[a][0] = new_s
 
