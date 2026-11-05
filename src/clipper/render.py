@@ -1479,8 +1479,11 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             try:
                 from .captionfix import heard_in_output, retime_words
                 cw = caption_words(merge_punct(clip["words"]))
-                fixed, moved = retime_words(cw, segments, heard_in_output(seg_wav, wav_t0, segments),
-                                           bias=cfg["captions"].get("sync_shift", 0.07))
+                heard = heard_in_output(seg_wav, wav_t0, segments)
+                fixed, moved = retime_words(cw, segments, heard, bias=cfg["captions"].get("sync_shift", 0.07))
+                import json as _json
+                (cdir / "retime.json").write_text(_json.dumps(
+                    {"segments": segments, "caption": [(w["w"], w["s"]) for w in cw], "heard": heard, "moved": moved}))
                 if moved:
                     log(f"{clip['id']}: retimed {len(moved)} caption words from the finished audio: {', '.join(moved[:12])}")
                     clip = {**clip, "words": fixed}
