@@ -127,11 +127,18 @@ def test_hole_in_silence_stays_open():
     assert out[0]["e"] == 29.50
 
 
-def test_long_gap_with_speech_is_not_closed_by_hole_rule():
+def test_long_gap_with_full_speech_is_closed():
     words = [_w("a", 19.0, 19.93), _w("b", 20.50, 21.0)]  # 0.57 s > HOLE_MAX, untouched words
     env = _env(22, [(19.0, 21.1)])
     out, _ = _retime(words, [(0.0, 22.0, 0.0)], [], env=env)
-    assert 0.57 > HOLE_MAX and out[0]["e"] == 19.93
+    assert 0.57 > HOLE_MAX and out[0]["e"] == 20.50  # speech fills it (drawn-out word tail): closed up to 0.8 s
+
+
+def test_long_gap_mostly_silent_stays_open():
+    words = [_w("a", 19.0, 19.93), _w("b", 20.50, 21.0)]
+    env = _env(22, [(19.0, 20.1), (20.45, 21.1)])  # ~0.17 s of quiet in the gap: not filled
+    out, _ = _retime(words, [(0.0, 22.0, 0.0)], [], env=env)
+    assert out[0]["e"] == 19.93
 
 
 def test_snap_to_onset_within_window_and_flag_outside():

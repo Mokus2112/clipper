@@ -16,6 +16,7 @@ RETIME_MAX = 1.00   # s: a larger difference is a mismatched word, not a timing 
 SNAP_WINDOW = 0.30  # s: a whisper start is snapped to the nearest audio-energy onset only within this window
 MIN_WORD = 0.08     # s: a snapped word never starts closer than this to the previous word of its segment
 HOLE_MAX = 0.40     # s: a gap this short with speech energy in it is closed by holding the previous caption
+HOLE_SPEECH_MAX = 0.80  # s: a longer gap is closed too when speech energy fills it (>85%): a held-out word tail
 SPEECH_DB = -40.0   # dB: envelope level that counts as speech energy
 
 
@@ -47,10 +48,10 @@ def pair_with_leftovers(cap: list[tuple[str, float]], heard: list[tuple[str, flo
     return sorted(pairs)
 
 
-def _speech_between(env: np.ndarray, t0: float, t1: float) -> bool:
-    """True when most of the output span [t0, t1] carries speech energy (env is the 10 ms output envelope)."""
+def _speech_between(env: np.ndarray, t0: float, t1: float, ratio: float = 0.5) -> bool:
+    """True when more than `ratio` of the output span [t0, t1] carries speech energy (env: 10 ms output envelope)."""
     i0, i1 = max(0, int(t0 / HOP)), min(len(env), int(t1 / HOP))
-    return i1 > i0 and float((env[i0:i1] >= SPEECH_DB).mean()) > 0.5
+    return i1 > i0 and float((env[i0:i1] >= SPEECH_DB).mean()) > ratio
 
 
 def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
@@ -105,8 +106,8 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
         for a, b in zip(order, order[1:]):
             gap = cur[b][0] - cur[a][1]
             closing = (a in touched or b in touched) and 0 < gap <= 0.6
-            if env is not None and 0 < gap <= HOLE_MAX and _speech_between(
-                    env, cur[a][1] - seg_s + off, cur[b][0] - seg_s + off):
+            if env is not None and 0 < gap <= HOLE_SPEECH_MAX and _speech_between(
+                    env, cur[a][1] - seg_s + off, cur[b][0] - seg_s + off, 0.5 if gap <= HOLE_MAX else 0.85):
                 closing = True
             if closing:
                 # never past the end of the segment: the middle would leave it and build_ass drops the word
