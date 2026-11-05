@@ -270,6 +270,40 @@ sources:
       Topic must be AI risks/dangers. Use words like could, might, maybe where the speaker hedges; never state
       predictions as facts. Start on the quoted hook line, end on a complete sentence. 10-40 seconds.
 
+  # The World's First Podcast (Clip Farm), $1.50 CPM, TikTok/IG/YT Shorts, joined 2026-11-05.
+  # Sources: ONLY the 3 provided Drive episodes (brief in agents/social/work/campaigns/fba5eb2b-*.md).
+  # Hook must be Erin or Sara saying something, 3-5 s, meaning unchanged. No ad segments, no clips without them.
+  - name: worlds-first-podcast
+    streamer: The World's First Podcast
+    channel_url: https://drive.google.com/file/d/1_BAuSAmX1qYwz9hLSiIyON0lzi7KTLUx/view
+    campaign_url: https://contentrewards.com/c/campaigns/fba5eb2b-624a-41d6-a6c7-4519e2877e2c
+    layout: auto
+    platforms: [youtube, tiktok, instagram]
+    tags: [theworldsfirstpodcast, podcast, sisters]
+    credit: ""
+    required_text: "The World's First Podcast"   # caption; tags @WorldsFirstPodcast (TikTok/IG), @WorldsFirstPod (YT)
+    hook_mention: ""
+    rank_notes: >-
+      Only Erin and Sara Foster speaking. Open on a true 3-5 second hook line from them, meaning unchanged.
+      Skip ad reads and sponsor segments. Kind, real, relatable sister moments; no mocking, no ragebait.
+      Minimum 10 seconds, end on a complete sentence.
+
+  # Let Him Mansplain (ClipLaunch), $1.25 CPM TikTok/IG, joined 2026-11-05. Posting WAITS for a dedicated LHM page.
+  # Sources: Frame.io content folder (brief in agents/social/work/campaigns/705f6e21-*.md). Tag @lethimmansplain first line.
+  - name: let-him-mansplain
+    streamer: Let Him Mansplain
+    channel_url: https://next.frame.io/share/b0022fd0-2654-487c-8a5e-cfb20a7f755d/
+    campaign_url: https://contentrewards.com/c/campaigns/705f6e21-38af-408c-9e55-c77e4611bf09
+    layout: auto
+    platforms: [tiktok, instagram]
+    tags: [lethimmansplain, podcast, relationships]
+    credit: ""
+    required_text: "@lethimmansplain"   # first line of every caption
+    hook_mention: ""
+    rank_notes: >-
+      Prefer two or more guests with varied answers; humorous, big reaction, truth bomb. Strong hook, clean
+      subtitles, meaningfully different from other clippers. Accurate titles, no bait.
+
   - name: cod-mw4-trailer
     streamer: Call of Duty
     channel_url: https://www.callofduty.com
