@@ -48,6 +48,10 @@ def pair_with_leftovers(cap: list[tuple[str, float]], heard: list[tuple[str, flo
     return sorted(pairs)
 
 
+def occ_count(occ, i):
+    return [o for o in occ if o[0] == i]
+
+
 def _speech_between(env: np.ndarray, t0: float, t1: float, ratio: float = 0.5) -> bool:
     """True when more than `ratio` of the output span [t0, t1] carries speech energy (env: 10 ms output envelope)."""
     i0, i1 = max(0, int(t0 / HOP)), min(len(env), int(t1 / HOP))
@@ -68,7 +72,7 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
     occ = output_occurrences(words, segments)
     cap = [(words[i]["w"], t) for i, _k, t in occ]
     cur = {(i, k): [words[i]["s"], words[i]["e"]] for i, k, _t in occ}  # (word, segment) -> new [s, e]
-    moved, touched, crossed = [], set(), set()
+    moved, touched, crossed, dropped = [], set(), set(), set()
     for ci, hj in pair_with_leftovers(cap, heard):
         i, k, t_cap = occ[ci]
         t_heard, mark = heard[hj][1], ""
@@ -86,7 +90,7 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
             # build_ass captions a word only if it starts inside its segment and its middle is inside too. A word
             # moved out of its segment would vanish and leave a hole under speech. If it landed in the NEIGHBOUR
             # segment (the aligner put it past a cut, the speaker said it before it: "a" at a join), it moves there
-            # (single-occurrence words only); otherwise it keeps its aligned time.
+            # (a replayed word gets ov[k] = None: not captioned in its old segment); otherwise it keeps its aligned time.
             dur = min(w["e"] - w["s"], MAX_MOVED_DUR)  # aligned durations after fillers are inflated (incident: 1.1 s)
             if seg_s - 0.02 <= new_s <= seg_e:
                 cur[(i, k)] = [new_s, min(new_s + dur, seg_e)]
@@ -94,9 +98,10 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
             else:
                 k2 = next((j for j in (k - 1, k + 1) if 0 <= j < len(segments)
                            and segments[j][0] - 0.02 <= new_s <= segments[j][1]), None)
-                if k2 is None or sum(1 for _i, _k, _t in occ if _i == i) != 1:
+                if k2 is None or (i, k2) in cur:
                     continue
                 cur.pop((i, k))
+                dropped.add((i, k))
                 cur[(i, k2)] = [new_s, min(new_s + dur, segments[k2][1])]
                 touched.add((i, k2))
                 crossed.add((i, k2))
@@ -124,12 +129,13 @@ def retime_words(words: list[dict], segments: list[tuple[float, float, float]],
     out = [dict(w) for w in words]
     for i, w in enumerate(out):
         ks = [k for (j, k) in cur if j == i]
-        if len(ks) == 1:
+        gone = {k for (j, k) in dropped if j == i}
+        if len(ks) == 1 and not (gone and len(occ_count(occ, i)) > 1):
             (k,) = ks
             if (i, k) in touched or cur[(i, k)][1] != w["e"]:
                 w["s"], w["e"] = cur[(i, k)]
-        elif ks and any((i, k) in touched or cur[(i, k)][1] != w["e"] for k in ks):
-            w["ov"] = {k: tuple(cur[(i, k)]) for k in ks}
+        elif ks and (gone or any((i, k) in touched or cur[(i, k)][1] != w["e"] for k in ks)):
+            w["ov"] = {**{k: tuple(cur[(i, k)]) for k in ks}, **{k: None for k in gone}}
     return out, moved
 
 

@@ -1151,10 +1151,14 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
         # A word is captioned only if it starts inside the segment and its middle is inside too:
         # no word from before the cut (cold open began after "To this day,"), no half-heard word at the end.
         # w["ov"][segment] (captionfix.retime_words) retimes a word replayed in two segments per occurrence.
-        words = [{**w, "s": w.get("ov", {}).get(seg_k, (w["s"], w["e"]))[0] - sync,
-                  "e": w.get("ov", {}).get(seg_k, (w["s"], w["e"]))[1] - sync}
-                 for w in caption_words(merge_punct(clip.get("words", [])))
-                 if w["s"] >= seg_s - 0.02 and (w["s"] + w["e"]) / 2 <= seg_e]
+        words = []
+        for w in caption_words(merge_punct(clip.get("words", []))):
+            ov = w.get("ov", {})
+            if seg_k in ov and ov[seg_k] is None:
+                continue  # moved into the neighbouring segment (captionfix.retime_words)
+            ws, we = ov.get(seg_k, (w["s"], w["e"]))
+            if ws >= seg_s - 0.02 and (ws + we) / 2 <= seg_e:
+                words.append({**w, "s": ws - sync, "e": we - sync})
         chunks = chunk_words(words, cc["max_words"], cc["max_chunk_sec"], fits if cap_font else None)
         for ci, chunk in enumerate(chunks):
             # The line appears `lead` s before the first word's onset, so the fade-in is done when

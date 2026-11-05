@@ -168,3 +168,15 @@ def test_word_spoken_before_a_join_moves_into_the_previous_segment():
     out, moved = _retime(words, segs, heard, bias=0.07, env=env)
     assert out[1]["s"] < 10.0
     assert any(m.startswith("a@") for m in moved)
+
+
+def test_replayed_word_moves_into_previous_segment_and_is_dropped_from_old_one():
+    # 012313-c1: "a" is in the cold open (segment 0) and aligned past the join into segment 2, but spoken
+    # at the tail of segment 1: only the segment-2 occurrence moves, ov[2] = None (not drawn there)
+    segs = [(9.0, 10.5, 0.0), (0.0, 10.0, 1.5), (10.0, 14.0, 11.5)]
+    words = [{"w": "a", "s": 10.3, "e": 10.45}]
+    env = _env(16, [(1.25, 1.5), (11.3, 11.5)])
+    out, moved = _retime(words, segs, [("a", 1.3), ("a", 11.35)], bias=0.07, env=env)
+    ov = out[0]["ov"]
+    assert ov[2] is None and ov[1][0] < 10.0 and 0 in ov
+    assert len(moved) == 1
