@@ -1397,7 +1397,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
     ]
     if hc["enabled"] and clip.get("hook"):
         lines += hook_events(cfg, clip, segments, shot_spans, fonts_dir, cap_font)
-    lines += badge_events(cfg, clip, segments, fonts_dir, cap_font)
+    lines += badge_events(cfg, clip, segments, fonts_dir, cap_font, shot_spans)
 
     max_w = cc.get("max_width", SAFE_RIGHT_X - SAFE_LEFT - 70)
     lead = cc.get("onset_lead", 0.03)
@@ -1527,6 +1527,30 @@ BADGE_SIZE = 64         # px, shrinks to fit the safe width
 BADGE_AFTER_HOOK = 0.2  # s: the badge never shares the hook's slot with the hook
 
 
+BADGE_MIN_SIZE = 44     # px: smaller than this is not readable on a phone (reviewer #1743); wraps to two lines first
+BADGE_FLOOR = 36        # px: last resort for a text that does not fit in two lines at BADGE_MIN_SIZE (WARN)
+BADGE_FADE_MS = 133     # 4 frames at 30 fps, fade in and out
+BADGE_SLIDE_PX = 36     # slides in from the left over the fade-in
+
+
+def badge_layout(font, text: str, size: int, avail: float, spacing: float = 0.0) -> tuple[list[str], int]:
+    """(lines, size): one line at the largest size >= BADGE_MIN_SIZE that fits `avail`, else two balanced lines
+    at the largest size that fits, else (WARN) the same shrunk down to BADGE_FLOOR. Never wider than `avail`."""
+    words = text.split()
+    splits = [[text]] + ([[" ".join(words[:k]), " ".join(words[k:])] for k in range(1, len(words))] if len(words) > 1 else [])
+    fit = lambda ls, sz: max(_width(font, ln, sz, spacing) for ln in ls) <= avail  # noqa: E731
+    for lo in (BADGE_MIN_SIZE, BADGE_FLOOR):
+        for ls in (splits[:1], sorted(splits[1:], key=lambda c: max(_width(font, ln, size, spacing) for ln in c))[:1]):
+            if not ls:
+                continue
+            for sz in range(size, lo - 1, -2):
+                if fit(ls[0], sz):
+                    if lo == BADGE_FLOOR:
+                        log(f"  WARN badge text {text!r} needs {sz} px (below {BADGE_MIN_SIZE}) to fit the safe width")
+                    return ls[0], sz
+    return splits[0], BADGE_FLOOR
+
+
 def out_time(segments, t: float) -> float | None:
     """Output time of source time t, or None when t lies in no segment."""
     for s_, e_, off in segments:
@@ -1535,7 +1559,7 @@ def out_time(segments, t: float) -> float | None:
     return None
 
 
-def badge_events(cfg: dict, clip: dict, segments, fonts_dir, cap_font=None) -> list[str]:
+def badge_events(cfg: dict, clip: dict, segments, fonts_dir, cap_font=None, shot_spans=None) -> list[str]:
     """One keyword badge (clip["badge"]): an accent-coloured chip with dark text, in the hook's slot, after the hook.
 
     clip["badge"] = {"text": "Clearest warning shot", "at": "clearest"} or {"text": ..., "t0": source seconds};
@@ -1572,21 +1596,28 @@ def badge_events(cfg: dict, clip: dict, segments, fonts_dir, cap_font=None) -> l
     text = ass_escape(str(b["text"])).upper()
     pad = bc.get("pad", 16)
     avail = SAFE_RIGHT_X - SAFE_LEFT - 2 * pad
-    size = bc.get("size", BADGE_SIZE)
-    while size > 36 and _width(font, text, size, hc.get("spacing", 0)) > avail:
-        size -= 2
-    tw = min(_width(font, text, size, hc.get("spacing", 0)), avail)
-    bh = _cap_h(font, size) + 2 * pad
+    spacing = hc.get("spacing", 0)
+    lines, size = badge_layout(font, text, bc.get("size", BADGE_SIZE), avail, spacing)
+    widths = [min(_width(font, ln, size, spacing), avail) for ln in lines]
+    ch, gap = _cap_h(font, size), int(0.3 * size)
+    bh = len(lines) * ch + (len(lines) - 1) * gap + 2 * pad
     yc = b.get("y", bc.get("y", hc["y"]))
-    x0, x1, y0, y1 = SAFE_LEFT, SAFE_LEFT + 2 * pad + tw, yc - bh / 2, yc + bh / 2
+    x0, x1, y0, y1 = SAFE_LEFT, SAFE_LEFT + 2 * pad + max(widths), yc - bh / 2, yc + bh / 2
+    for sa, sb, kind, *rest in (shot_spans or []):
+        geo = rest[0] if rest else None
+        if kind.startswith("face") and geo and sa < z and sb > a and y1 > geo["ft"] - 10:
+            log(f"  WARN badge {b['text']!r} (y {y0:.0f}-{y1:.0f}) sits on the face of the shot at {sa:.1f}-{sb:.1f} s; set clip.badge.y")
+            break
     t = f"{ass_time(a)},{ass_time(z)}"
-    fad = "\\fad(120,120)"
+    fx = f"\\fad({BADGE_FADE_MS},{BADGE_FADE_MS})"
+    slide = lambda px, py: f"\\move({px - BADGE_SLIDE_PX:.0f},{py:.0f},{px:.0f},{py:.0f},0,{BADGE_FADE_MS})"  # noqa: E731
     rect = f"m {x0:.0f} {y0:.0f} l {x1:.0f} {y0:.0f} l {x1:.0f} {y1:.0f} l {x0:.0f} {y1:.0f}"
-    return [
-        f"Dialogue: 1,{t},HookBox,,0,0,0,,{{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\c{bc.get('fill', hc['box'])}{fad}}}{rect}",
-        f"Dialogue: 3,{t},HookText,,0,0,0,,{{\\an4\\pos({x0 + pad},{yc - _cap_off(font, size):.0f})\\fs{size}"
-        f"\\c{bc.get('color', hc['fill'])}{fad}}}{text}",
-    ]
+    out = [f"Dialogue: 1,{t},HookBox,,0,0,0,,{{\\an7{slide(0, 0)}\\p1\\bord0\\shad0\\c{bc.get('fill', hc['box'])}{fx}}}{rect}"]
+    for n, ln in enumerate(lines):
+        ly = y0 + pad + ch / 2 + n * (ch + gap)  # centre of this line's capital height
+        out.append(f"Dialogue: 3,{t},HookText,,0,0,0,,{{\\an4{slide(x0 + pad, ly - _cap_off(font, size))}\\fs{size}"
+                   f"\\c{bc.get('color', hc['fill'])}{fx}}}{ln}")
+    return out
 
 
 def music_ratio(jd: Path, start: float, end: float, threshold: float) -> float | None:
