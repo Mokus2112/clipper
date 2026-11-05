@@ -67,8 +67,8 @@ def face_boxes(video: Path, dur: float) -> list[tuple[float, tuple[int, int, int
         ok, fr = cap.read()
         if ok:
             _, faces = det.detect(cv2.resize(fr, (540, 960)))
-            for f in faces if faces is not None else []:
-                x, y, w, h = (float(v) * 2 for v in f[:4])
+            raw = [tuple(float(v) * 2 for v in f[:4]) + (float(f[14]),) for f in (faces if faces is not None else [])]
+            for x, y, w, h, _sc in drop_false_faces(raw):
                 if w >= 1080 * SPEAKER_FACE_W:
                     out.append((t, (int(x), int(y), int(x + w), int(y + h))))
         t += 0.5
