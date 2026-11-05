@@ -31,8 +31,12 @@ def _num(n: int) -> str:
 def spoken(word: str) -> list[str]:
     """A transcript token as the letter sequences the aligner can match ('50%' -> fifty percent)."""
     w = word.lower().replace("’", "'")
-    w = w.replace("%", " percent").replace("&", " and ").replace("$", " dollars ")
-    w = re.sub(r"\d+", lambda m: " " + _num(int(m.group())) + " ", w)
+    w = w.replace("%", " percent").replace("&", " and ")
+    cur = "$" in w
+    w = w.replace("$", " ")
+    w = re.sub(r"\d[\d,]*\d|\d", lambda m: " " + _num(int(m.group().replace(",", ""))) + " ", w)
+    if cur:  # "$20,000" is said "twenty thousand dollars"
+        w += " dollars"
     parts = [re.sub(r"[^a-z']", "", p).strip("'") for p in w.split()]
     return [p for p in parts if p]
 
@@ -56,8 +60,13 @@ def align_words(words: list[dict], audio: np.ndarray, t0: float) -> list[dict] |
     import torch
     m = _load()
     pieces, owner = [], []
+    texts = [w["w"] for w in words]
+    for i in range(len(texts) - 1, 0, -1):  # Whisper splits "$20,000." into "$20" + ",000."
+        if re.match(r"^,\d", texts[i]) and re.search(r"\d$", texts[i - 1]):
+            texts[i - 1] += texts[i]
+            texts[i] = ""
     for i, w in enumerate(words):
-        for p in spoken(w["w"]):
+        for p in spoken(texts[i]):
             pieces.append(p)
             owner.append(i)
     if not pieces:
