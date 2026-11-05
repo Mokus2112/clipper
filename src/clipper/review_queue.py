@@ -68,6 +68,7 @@ def add(cfg: dict, clip: dict, source: dict, file: Path) -> None:
         "score": clip["score"],
         "music": clip.get("music"),
         "reason": clip["reason"],
+        "added_value": clip.get("added_value", ""),
         "duration": round(clip["end"] - clip["start"], 1),
         "source": source["name"],
         # Practice sources are for pipeline evaluation only: never offered for approval or upload.

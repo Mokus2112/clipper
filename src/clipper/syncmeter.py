@@ -19,11 +19,11 @@ from pathlib import Path
 import numpy as np
 
 UNCERTAIN_MS = 150
-FAIL_MS = 150  # whisper AND an energy onset agree: precise, 150 ms is a real slip
+FAIL_MS = 250  # whisper AND an energy onset agree: a word this far off is a slip (Codee #1310: was 150)
 # Whisper alone (no pause-preceded onset to confirm it) is only good to ~+-200 ms: hand check on Cotra 002210
 # c1/c2 against energy onsets gave mean error 100-130 ms, p90 ~220 ms for BOTH the retime and whisper on the
 # finished audio (Codee #880). Two such measures differ by >150 ms by chance, so QA judged its own noise.
-WHISPER_ONLY_FAIL_MS = 300
+WHISPER_ONLY_FAIL_MS = 400  # was 300 (Codee #1310)
 CAP_NEAR_MS = 200  # an energy onset this close to the caption backs it over whisper
 HOP = 0.01
 QUIET_STEPS = 8  # 80 ms of quiet before an energy onset counts

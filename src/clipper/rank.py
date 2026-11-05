@@ -44,8 +44,8 @@ Hard rules:
   The clip must END ON A NATURAL CLOSURE: the answer, conclusion or punchline is complete. Never end on a question
   whose answer is cut off, or on a half-made argument; extend the end to the speaker's closing sentence instead.
   The quotes decide the cut; the numbers are only a hint. A clip whose quotes are not in the transcript is dropped.
-- hook: on-screen text, 3-5 words and at most {hook_max} characters (spaces included; a hard limit, longer
-  hooks are rejected), shown in one line over the cold open. It must create tension or a question that only
+- hook: on-screen text, 3-7 words and at most {hook_max} characters (spaces included; a hard limit, longer
+  hooks are rejected), shown over the cold open (the layout wraps it to two lines). It must create tension or a question that only
   watching the clip answers. Good: "He bet his car on this", "Chat lied to him", "She was not ready for this",
   "This cost him $10,000". Bad (descriptive, no tension): "Kai's honest review of the greens",
   "Funny moment on stream", "Speed at the zoo". No emojis, no lies, not just the streamer's name.
@@ -59,6 +59,9 @@ Hard rules:
 - claim: ONE sentence stating what the clip says or shows and its punchline/point (what a viewer takes away).
   If you cannot write it, the clip has nothing to say: do not return it. Empty claim = rejected.
 - story: one sentence, "setup -> payoff".
+- added_value: one sentence, what this clip adds beyond raw footage (the speaker's own commentary, a cut that
+  tightens it, context in the hook). Platforms ban channels of unnarrated compilations (YouTube reused content,
+  whole channel). Empty = rejected.
 - caption: one short line for TikTok/Instagram, under 100 characters, curiosity-driven, may differ from the title.
   The same rule as for hook/title: no allegations about real people stated as fact.
 - Prefer moments where the streamer/speaker reacts, explains or comments in their own words over raw footage
@@ -76,7 +79,7 @@ Hard rules:
 Return ONLY a JSON array:
 [{{"start": s, "end": s, "payoff_start": s, "payoff_end": s, "start_quote": "...", "end_quote": "...",
 "payoff_quote": "...", "hook": "...", "title": "...", "story": "...",
-"claim": "...", "caption": "...", "hashtags": ["..."], "score": n, "reason": "..."}}]
+"claim": "...", "added_value": "...", "caption": "...", "hashtags": ["..."], "score": n, "reason": "..."}}]
 
 Transcript:
 {transcript}
@@ -149,8 +152,8 @@ def title_budget(source: dict, limit: int = 60) -> int:
     return limit - (len(prefix) + 1 if prefix else 0)
 
 
-HOOK_MAX_CHARS = 28  # one line of the hook font at >= 80 px inside the safe zone
-HOOK_MAX_WORDS = 5
+HOOK_MAX_CHARS = 40  # wraps to two lines of the hook font inside the safe zone
+HOOK_MAX_WORDS = 7
 
 
 def hook_budget(source: dict) -> int:
@@ -348,6 +351,9 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
         if not str(p.get("claim", "")).strip():
             log(f"dropping pick '{p.get('title', '')[:50]}': no claim (nothing to say)")
             continue
+        if not str(p.get("added_value", "")).strip():
+            log(f"dropping pick '{p.get('title', '')[:50]}': no added_value (unnarrated footage)")
+            continue
         bp = boundary_problems(seg_words, qs[0], qe[1])
         if bp:
             log(f"dropping pick '{p.get('title', '')[:50]}': {'; '.join(bp)}")
@@ -390,6 +396,7 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
             "hook": hook,
             "title": p["title"].strip()[:95],
             "claim": p["claim"].strip(),
+            "added_value": p["added_value"].strip(),
             "story": p.get("story", ""),
             "caption": p.get("caption", p["title"]).strip(),
             "hashtags": [h.strip().lstrip("#").replace(" ", "") for h in p.get("hashtags", []) if h.strip()][:5],

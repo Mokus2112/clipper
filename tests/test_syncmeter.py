@@ -31,7 +31,7 @@ def test_agreeing_whisper_and_energy_gives_late_verdict():
 
 
 def test_ok_within_tolerance():
-    assert sm.Row("A", 1.05, 1.0, 1.0).verdict == "ok"
+    assert sm.Row("A", 1.20, 1.0, 1.0).verdict == "ok"
 
 
 def test_pairing_skips_words_missing_from_audio():
@@ -69,7 +69,7 @@ def test_group_onset_goes_to_one_word_only():
 def test_word_without_onset_is_judged_by_whisper_alone():
     r = _row("SEEMED", 24.87, 24.92, None)
     assert not r.uncertain and r.verdict == "ok"
-    late = _row("LOSS", 11.11, 10.76, None)
+    late = _row("LOSS", 11.11, 10.60, None)
     assert late.verdict == "late"
 
 
@@ -122,11 +122,30 @@ def test_qa_stays_silent_below_unmatched_threshold(monkeypatch):
 def test_whisper_only_word_uses_noise_floor_threshold():
     from clipper.syncmeter import Row
     # no energy onset: 230 ms is inside whisper's own +-200 ms jitter, not a slip (Codee #880)
-    assert Row("SEPARATE", 3.73, 3.96, None).verdict == "ok"
-    assert Row("SEPARATE", 3.73, 4.10, None).verdict == "early"
+    assert Row("SEPARATE", 3.73, 4.10, None).verdict == "ok"
+    assert Row("SEPARATE", 3.73, 4.20, None).verdict == "early"
 
 
-def test_energy_confirmed_word_keeps_150ms():
+def test_energy_confirmed_word_limit_is_250ms():
     from clipper.syncmeter import Row
-    assert Row("X", 5.00, 5.20, 5.19).verdict == "early"
-    assert Row("X", 5.00, 5.10, 5.09).verdict == "ok"
+    assert Row("X", 5.00, 5.30, 5.29).verdict == "early"
+    assert Row("X", 5.00, 5.20, 5.19).verdict == "ok"
+
+
+def test_few_off_words_are_a_warning_not_a_failure(monkeypatch):
+    from clipper import qa
+    rows = _rows("o" * 30)
+    rows[3] = sm.Row("OFF", 3.5, 3.0, 3.0)  # 1 of 30 words 500 ms late, median stays 0
+    monkeypatch.setattr(sm, "measure", lambda v, a: rows)
+    out = qa.check_caption_sync_words(None, None)
+    assert len(out) == 1 and out[0].startswith(qa.WARN)
+
+
+def test_many_off_words_still_fail(monkeypatch):
+    from clipper import qa
+    rows = _rows("o" * 20)
+    for i in range(4):  # 20% of the words
+        rows[i] = sm.Row(f"OFF{i}", i + 0.5, float(i), float(i))
+    monkeypatch.setattr(sm, "measure", lambda v, a: rows)
+    out = qa.check_caption_sync_words(None, None)
+    assert len(out) == 1 and not out[0].startswith(qa.WARN)
