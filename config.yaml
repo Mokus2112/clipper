@@ -308,9 +308,10 @@ sources:
   # Brief: agents/social/work/campaigns/a6e3a983-*.md. ONLY source: youtube.com/watch?v=5pk8HLcAAT0.
   # Required: 15 s+, English captions all through (key word highlight, off faces), own hook, ORIGINAL B-ROLL
   # (free licence only, no AI), own caption, tags YT @GregLaVecchia + @theicedcoffeehour / IG @greglav + @theicedcoffeehour.
-  # INACTIVE until the b-roll plan is approved by Codee.
+  # b-roll plan approved (Codee #1727): own-drawn number cards only.
   - name: iced-coffee-hour
     active: false
+    broll: true
     streamer: Greg Lav (The Iced Coffee Hour)
     channel_url: https://www.youtube.com/watch?v=5pk8HLcAAT0
     campaign_url: https://contentrewards.com/c/campaigns/a6e3a983-c8c7-4c4f-ac48-22022b391562

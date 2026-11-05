@@ -12,6 +12,7 @@ dependencies = [
     "mlx-whisper>=0.4.2; sys_platform == 'darwin'",
     "numpy>=2.5.4",
     "opencv-python-headless>=4.10,<5",
+    "pillow>=13.0.0",
     "pyyaml>=6.0.3",
     "torch>=2.15.0",
     "torchaudio>=2.11.1",

@@ -1924,6 +1924,21 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         # 0.5 s slot, so nocap frame i showed t=i/2+0.23 and QA placed caption shifts too early.
         graph.append(f"[{cap_in}]split[cap_a][cap_b];[cap_b]fps=2:round=up,scale=540:960[nc]")
         cap_in = "cap_a"
+        if source.get("broll"):
+            from . import broll as _br
+            ow = [{"w": w["w"], "s": off + w["s"] - a, "e": off + min(w["e"], b) - a}
+                  for w in clip.get("words", []) for a, b, off in segments if a <= w["s"] < b]
+            plan = _br.plan_inserts(_br.number_phrases(ow), sum(b - a for a, b, _ in segments))
+            if plan:
+                cards = _br.write_cards(plan, cdir / "broll", float(rc["fps"]), Path(fonts) / "Montserrat-ExtraBold.ttf", W, H)
+                first = len(inputs_idx(inputs))
+                for c in cards:
+                    inputs += ["-framerate", rc["fps"], "-i", str((Path(c["dir"]) / "%04d.png").resolve())]
+                graph.append(_br.overlay_graph(cap_in, cards, first, "cap_br", float(rc["fps"])))
+                cap_in = "cap_br"
+                write_json(cdir / "b-roll.json", {"license": _br.LICENSE, "source": "drawn in code (Pillow), no external media",
+                                                  "inserts": [{k: c[k] for k in ("kind", "text", "t0", "t1", "license")} for c in cards]})
+                log(f"  b-roll: {[(c['text'], c['t0']) for c in cards]}")
         logo = source.get("logo")
         if logo:
             # Campaign-mandated logo (Alliance): white padded box, centred under the video panel, whole clip.
