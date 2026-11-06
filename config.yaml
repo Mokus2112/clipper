@@ -324,6 +324,26 @@ sources:
       Business/startup lessons from Greg Lav (Bloom Nutrition) with a concrete number or step. Open on a true hook
       line, end on a complete sentence, 15-45 seconds. Needs spots for original b-roll. No clickbait.
 
+  # Lula Granji x The Packed Lunch (ClipHaus), $1.50 CPM, YT Shorts/TikTok/IG, joined 2026-11-06 (Codee #1797).
+  # Rules: https://app.notion.com/p/Lula-Granji-x-The-Packed-Lunch-Campaign-Rules-40c0395e47eb81d0a5f5cad7b21625f4
+  # Sources: ONLY the campaign Drive folder 1XdZnUJYxlaPKB8YEuMfwKW3xpcAYy0Mt (pilot mp4 + Holiday Shorts), no login needed.
+  # Original audio untouched, no outside music, no character changes, no spoilers, 9:16, 15-60 s, NO badge/watermark.
+  # Every post: 3 hashtags + CTA full pilot (https://youtu.be/WIKgZqcHliA) + subscribe to @lulagranji and @ThePackedLunchAnimatedSeries.
+  - name: lula-packed-lunch
+    active: false
+    streamer: The Packed Lunch Animated Series
+    channel_url: https://youtu.be/WIKgZqcHliA
+    campaign_url: https://contentrewards.com/c/campaigns/3fef7535-942c-4aee-b050-ea8fc5be25ab
+    layout: auto
+    platforms: [youtube, tiktok, instagram]
+    tags: [thepackedlunchanimatedseries, thepackedlunch, packedlunchcartoon]
+    credit: ""
+    required_text: "Full pilot on YouTube: https://youtu.be/WIKgZqcHliA Subscribe to @lulagranji and @ThePackedLunchAnimatedSeries #thepackedlunchanimatedseries #thepackedlunch #packedlunchcartoon"
+    rank_notes: >-
+      Animated adult comedy. Pick the funniest character moment, a catchy song hook, or a cliffhanger that ends
+      before the payoff. Open on the strongest beat in the first 1-2 s, keep original audio and dialogue intact,
+      15-60 s, end on a natural beat. No major spoilers, no full scenes, no edits to the characters.
+
   - name: cod-mw4-trailer
     streamer: Call of Duty
     channel_url: https://www.callofduty.com
