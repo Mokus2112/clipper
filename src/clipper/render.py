@@ -1117,6 +1117,29 @@ def black_runs(video: Path, start: float, end: float, min_len: float = MONTAGE_B
         capture_output=True, text=True, check=True)
     return [(start + float(a), start + float(b))
             for a, b in re.findall(r"black_start:([\d.]+) black_end:([\d.]+)", res.stderr)]
+MIN_FINAL_CUT = 0.3  # s; a final segment shorter than this is a flash of a cut, not a shot (felulbiralo #552)
+
+
+def drop_short_final(segments: list, nframes: list, fps: float, words: list, min_len: float = MIN_FINAL_CUT):
+    """Drop a last segment shorter than min_len unless it holds speech; later offsets are unaffected (it is last)."""
+    if len(segments) < 2 or nframes[-1] / fps >= min_len:
+        return segments, nframes
+    s_, e_, _ = segments[-1]
+    if any(w["s"] < e_ and w["e"] > s_ for w in words):
+        return segments, nframes
+    return segments[:-1], nframes[:-1]
+
+
+def trim_black_edges(start: float, end: float, runs: list, fps: float, max_edge: float = 1.0) -> tuple[float, float]:
+    """Move [start, end] inward past black runs that touch the window edges (within max_edge)."""
+    for a, b in sorted(runs):
+        if a <= start + 1 / fps and b < end:
+            start = max(start, b)
+        elif b >= end - 1 / fps and a > start and end - a <= max_edge:
+            end = min(end, a)
+    return start, end
+
+
 END_QUIET_DB = -46.0  # last 60 ms of a clip end must be at most this loud
 GAP_MAX, GAP_KEEP = 0.3, 0.1   # internal silences longer than GAP_MAX are cut down to 2 x GAP_KEEP
 SILENCE_DB = -35.0   # 20 ms RMS below this counts as silence for word-timing refinement
@@ -1722,6 +1745,11 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             if black > black_max(cfg):
                 log(f"  DROP {clip['id']}: {black:.0%} of the window is black (title cards), limit {black_max(cfg):.0%}")
                 continue
+        if not source.get("montage"):  # montage black is cut below; elsewhere only a black clip edge is trimmed
+            m0, m1 = trim_black_edges(main[0], main[1], black_runs(video, main[0], main[1]), info["fps"])
+            if (m0, m1) != (main[0], main[1]):
+                log(f"  black edge trimmed: {m0 - main[0]:.2f} s lead / {main[1] - m1:.2f} s tail")
+                raw[-1] = main = (m0, m1)
         # Frame-exact segments: (start, end, output offset), each a whole number of frames.
         segments, nframes, off = [], [], 0.0
         for a_, b_ in raw:
@@ -1806,6 +1834,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 nframes.append(b_ - a_)
                 o += (b_ - a_) / fps
             log(f"  tightened {len(cuts_f)} internal gaps: {sum(f1 - f0 for f0, f1 in cuts_f) / fps:.2f}s removed")
+        segments, nframes = drop_short_final(segments, nframes, info["fps"], words)
         clip = {**clip, "cold_len": segments[0][1] - segments[0][0] if len(raw) > 1 else 0.0}
         layout, cx, cam, track = pick_layout(cfg, source, video, info, main[0], main[1])
         face_top = getattr(face_boxes, "last_top", None) if layout in ("center", "auto") else None
