@@ -1130,14 +1130,23 @@ def drop_short_final(segments: list, nframes: list, fps: float, words: list, min
     return segments[:-1], nframes[:-1]
 
 
-def trim_black_edges(start: float, end: float, runs: list, fps: float, max_edge: float = 1.0) -> tuple[float, float]:
-    """Move [start, end] inward past black runs that touch the window edges (within max_edge)."""
+def trim_black_edges(start: float, end: float, runs: list, fps: float, words: list | None = None,
+                     max_edge: float = 1.5, min_left: float = 3.0) -> tuple[float, float]:
+    """Move [start, end] inward past black runs touching the window edges.
+
+    A run is skipped when it overlaps a word (black picture with voice-over), when it is longer than max_edge
+    on that side, or when the cut would leave less than min_left seconds (the original window stays, never a stub).
+    """
+    words = words or []
+    s0, e0 = start, end
     for a, b in sorted(runs):
-        if a <= start + 1 / fps and b < end:
+        if any(w["s"] < b and w["e"] > a for w in words):
+            continue
+        if a <= start + 1 / fps and b < end and b - start <= max_edge:
             start = max(start, b)
         elif b >= end - 1 / fps and a > start and end - a <= max_edge:
             end = min(end, a)
-    return start, end
+    return (start, end) if end - start >= min_left else (s0, e0)
 
 
 END_QUIET_DB = -46.0  # last 60 ms of a clip end must be at most this loud
@@ -1746,7 +1755,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 log(f"  DROP {clip['id']}: {black:.0%} of the window is black (title cards), limit {black_max(cfg):.0%}")
                 continue
         if not source.get("montage"):  # montage black is cut below; elsewhere only a black clip edge is trimmed
-            m0, m1 = trim_black_edges(main[0], main[1], black_runs(video, main[0], main[1]), info["fps"])
+            m0, m1 = trim_black_edges(main[0], main[1], black_runs(video, main[0], main[1]), info["fps"], words)
             if (m0, m1) != (main[0], main[1]):
                 log(f"  black edge trimmed: {m0 - main[0]:.2f} s lead / {main[1] - m1:.2f} s tail")
                 raw[-1] = main = (m0, m1)
