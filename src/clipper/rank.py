@@ -3,6 +3,7 @@
 import json
 import re
 import subprocess
+from pathlib import Path
 
 from .common import find_source, job_dir, log, read_json, tool, write_json
 
@@ -100,6 +101,12 @@ Return ONLY a JSON array: [{{"n": 1, "reject": false, "rule": "", "reason": ""}}
 
 {items}
 """
+
+
+def style_notes() -> str:
+    """Short style reference (references/style.md) for the ranker: pacing and hook taste, never content to copy."""
+    path = Path(__file__).resolve().parents[2] / "references" / "style.md"
+    return f"Style reference (taste only, do not copy content):\n{path.read_text()}\n" if path.exists() else ""
 
 
 def clip_text(segments: list[dict], start: float, end: float) -> str:
@@ -343,7 +350,7 @@ def rank(cfg: dict, job_id: str, min_score: int | None = None) -> list[dict]:
         try:
             out = ask_claude(cfg, PROMPT.format(
             streamer=source["streamer"], n=rc["clips_per_vod"],
-            notes=(f"Campaign rules (hard): {source['rank_notes']}\n" if source.get("rank_notes") else ""), min_sec=cc["min_sec"],
+            notes=(f"Campaign rules (hard): {source['rank_notes']}\n" if source.get("rank_notes") else "") + style_notes(), min_sec=cc["min_sec"],
             max_sec=cc["max_sec"] - cfg["render"]["cold_open_max"], transcript="\n".join(part),
             title_max=title_budget(source), hook_max=hook_budget(source),
             ), jd)
