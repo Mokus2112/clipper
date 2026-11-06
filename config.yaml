@@ -344,6 +344,8 @@ sources:
       Animated adult comedy. Pick the funniest character moment, a catchy song hook, or a cliffhanger that ends
       before the payoff. Open on the strongest beat in the first 1-2 s, keep original audio and dialogue intact,
       15-60 s, end on a natural beat. No major spoilers, no full scenes, no edits to the characters.
+      Avoid windows containing non-speech sound-effect stretches over 0.7 s (sfx or music with no spoken words).
+      Never use any window overlapping 249-274 s of this source (QA failed it twice).
 
   - name: cod-mw4-trailer
     streamer: Call of Duty
