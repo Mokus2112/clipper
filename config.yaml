@@ -349,6 +349,26 @@ sources:
       Avoid windows containing non-speech sound-effect stretches over 0.7 s (sfx or music with no spoken words).
       For the full pilot file only: never use any window overlapping 249-274 s (QA failed it twice).
 
+  # Perplexity x Rohith Kolluri / Ecomm Cowboy (Clip Farm), $2.00 CPM, TT/IG/YT Shorts, joined 2026-11-06 (Codee, via social #1843).
+  # Brief: agents/social/work/campaigns/8663de46-*.md. ONLY source: Drive "Rohith Kolluri Interview.mp4" (data/perplexity_src/rohith.mp4).
+  # Required: caption in English with "Perplexity" + CTA ("gotta try this" / "try this out" / "must try!"), Perplexity logo visible
+  # on screen, clip is about Perplexity, no clickbait. 30 days live, 40%+ US. Posting only after Badi's gate.
+  - name: perplexity-rohith
+    active: false
+    streamer: Rohith Kolluri (Perplexity)
+    channel_url: https://drive.google.com/file/d/1UJ4-8ugoelwVu_u6uI47_KTjr0j_NCFE/view
+    campaign_url: https://contentrewards.com/c/campaigns/8663de46-a5c9-4ab8-9368-7c462a78aa4e
+    layout: auto
+    platforms: [youtube, tiktok, instagram]
+    tags: [perplexity, ai, tech]
+    credit: ""
+    required_text: "Perplexity - must try!"
+    rank_notes: >-
+      Podcast segment about Perplexity. Pick moments where Rohith Kolluri explains what Perplexity does or why it is
+      better, with a concrete example or number, and that make a viewer want to try it. The clip must be about
+      Perplexity and the Perplexity logo must be visible in frame. Open on a true hook line, end on a complete
+      sentence, 15-45 seconds. No clickbait, no claims the speaker does not make.
+
   - name: cod-mw4-trailer
     streamer: Call of Duty
     channel_url: https://www.callofduty.com
