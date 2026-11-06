@@ -331,6 +331,7 @@ sources:
   # Every post: 3 hashtags + CTA full pilot (https://youtu.be/WIKgZqcHliA) + subscribe to @lulagranji and @ThePackedLunchAnimatedSeries.
   - name: lula-packed-lunch
     active: false
+    prescreen: {animated: true}   # Codee #1799: cuts limit 30/40 s, top-strip banner detector warns only
     streamer: The Packed Lunch Animated Series
     channel_url: https://youtu.be/WIKgZqcHliA
     campaign_url: https://contentrewards.com/c/campaigns/3fef7535-942c-4aee-b050-ea8fc5be25ab

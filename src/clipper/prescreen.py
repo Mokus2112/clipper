@@ -24,6 +24,7 @@ DEFAULTS = {
     "max_top_edge_ratio": 0.15,  # share of samples with a text-free graphic banner (edges) in the top strip
     "max_silence_ratio": 0.25,   # share of 50 ms windows below silence_db
     "silence_db": -70.0,
+    "animated_max_cuts_per_40s": 30,  # source `prescreen: {animated: true}` only (Codee #1799)
 }
 
 
@@ -37,22 +38,32 @@ def top_band_has_edges(frame, strip_px: int = 130, out_h: int = 1920, thr: float
     return cv2.Canny(band, 60, 150).mean() / 255 >= thr
 
 
-def decide(m: dict, thr: dict, has_identity: bool, tracks_faces: bool = True) -> list[str]:
-    """Reasons to drop a candidate from its measurements (empty list = keep)."""
-    why = []
+def decide_full(m: dict, thr: dict, has_identity: bool, tracks_faces: bool = True,
+                animated: bool = False) -> tuple[list[str], list[str]]:
+    """(drop reasons, warnings) from a candidate's measurements. Without `animated` the warnings are always
+    empty and the reasons are exactly the historical ones. Animated source (Codee #1799): the cuts limit is
+    animated_max_cuts_per_40s and the top-strip banner/graphic detector only warns (the reviewer sees it)."""
+    why, warn = [], []
     if has_identity and m["identity_ratio"] < thr["min_identity_ratio"]:
         why.append(f"identity ratio {m['identity_ratio']:.2f} < {thr['min_identity_ratio']}")
     if tracks_faces and not has_identity and m["multi_face_ratio"] > thr["max_multi_face_ratio"]:
         why.append(f"2+ faces in {m['multi_face_ratio']:.0%} of samples")
-    if m["cuts_per_40s"] > thr["max_cuts_per_40s"]:
+    max_cuts = thr["animated_max_cuts_per_40s"] if animated else thr["max_cuts_per_40s"]
+    if m["cuts_per_40s"] > max_cuts:
         why.append(f"{m['cuts_per_40s']:.1f} cuts per 40 s")
     if m["top_text_ratio"] > thr["max_top_text_ratio"]:
         why.append(f"top-strip text in {m['top_text_ratio']:.0%} of samples")
     if m.get("top_edge_ratio", 0.0) > thr["max_top_edge_ratio"]:
-        why.append(f"burned-in banner/graphic in the top strip in {m['top_edge_ratio']:.0%} of samples")
+        msg = f"burned-in banner/graphic in the top strip in {m['top_edge_ratio']:.0%} of samples"
+        (warn if animated else why).append(msg)
     if m["silence_ratio"] > thr["max_silence_ratio"]:
         why.append(f"digital silence {m['silence_ratio']:.0%}")
-    return why
+    return why, warn
+
+
+def decide(m: dict, thr: dict, has_identity: bool, tracks_faces: bool = True) -> list[str]:
+    """Reasons to drop a candidate from its measurements (empty list = keep)."""
+    return decide_full(m, thr, has_identity, tracks_faces)[0]
 
 
 def silence_ratio(video, start: float, dur: float, db: float) -> float:
@@ -136,12 +147,15 @@ def prescreen(cfg: dict, job_id: str) -> list[dict]:
     for c in clips:
         try:
             m = measure(video, c["start"], c["end"], source.get("identity"), thr["fps"], thr["silence_db"])
-            why = decide(m, thr, bool(source.get("identity")), source.get("layout") != "center")
+            why, warn = decide_full(m, thr, bool(source.get("identity")), source.get("layout") != "center",
+                                    animated=bool((source.get("prescreen") or {}).get("animated")))
+            if warn:
+                c["prescreen_warnings"] = warn
         except Exception as exc:  # a failed measurement must never block the pipeline
             log(f"prescreen: {c['id']} not measured ({exc}), keeping")
-            m, why = {"error": str(exc)}, []
+            m, why, warn = {"error": str(exc)}, [], []
         report.append({"id": c["id"], "start": c["start"], "end": c["end"], "metrics": m,
-                       "dropped": bool(why), "reasons": why})
+                       "dropped": bool(why), "reasons": why, "warnings": warn})
         if why:
             log(f"prescreen DROP {c['id']}: {'; '.join(why)}")
         else:
