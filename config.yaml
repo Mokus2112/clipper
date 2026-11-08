@@ -85,7 +85,7 @@ captions:
   spacing: 1
   back: "&H66000000"       # shadow colour, 60% black
   blur: 1
-  max_width: 760           # px incl. outline + shadow, measured from the font file (chunk_words fits)
+  max_width: 750           # px incl. outline + shadow (centre 475: right edge <= 850, action rail), measured from the font file (chunk_words fits)
   onset_lead: 0.03         # line appears this much before the first word's onset ...
   fade_ms: 70              # ... and fades in (no fade on lines shorter than 0.2 s)
   highlight_outline: "&H00000000"  # black outline under the yellow word (tested: crisper than mustard on white)

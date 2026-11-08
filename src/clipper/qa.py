@@ -86,18 +86,47 @@ def face_boxes(video: Path, dur: float) -> list[tuple[float, tuple[int, int, int
     return out
 
 
+def zone_overlay(video: Path, out: Path, texts: list, faces: list, t: float = 1.0) -> None:
+    """Debug image: one frame with the forbidden zones shaded (top UI, right button rail, below the text limit)
+    and every text/face box drawn, red where it breaks a zone, green where it is clear (video #207)."""
+    import cv2
+    cap = cv2.VideoCapture(str(video))
+    cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+    ok, fr = cap.read()
+    if not ok:  # t past the end: fall back to the first frame
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        ok, fr = cap.read()
+    cap.release()
+    if not ok:
+        return
+    h, w = fr.shape[:2]
+    shade = fr.copy()
+    for x0, y0, x1, y1 in ((0, 0, w, TOP), (TEXT_RIGHT, 0, w, h), (0, TEXT_BOTTOM, w, h)):
+        cv2.rectangle(shade, (x0, y0), (x1, y1), (0, 0, 255), -1)
+    fr = cv2.addWeighted(shade, 0.3, fr, 0.7, 0)
+    for boxes, (xm, ym, ymax) in ((texts, (TEXT_RIGHT, TOP, TEXT_BOTTOM)), (faces, (RIGHT, TOP, BOTTOM))):
+        for _t, (x0, y0, x1, y1) in boxes:
+            bad = y0 < ym or y1 > ymax or x1 > xm
+            cv2.rectangle(fr, (x0, y0), (x1, y1), (0, 0, 255) if bad else (0, 200, 0), 2)
+    cv2.imwrite(str(out), fr)
+
+
 def check_safe_zone(cdir: Path, fonts: Path) -> list[str]:
     video = cdir / "short.mp4"
     dur = _duration(video)
     bad = []
-    for t, (x0, y0, x1, y1) in text_boxes(cdir, dur, fonts):
+    texts, faces = text_boxes(cdir, dur, fonts), face_boxes(video, dur)
+    for t, (x0, y0, x1, y1) in texts:
         if y0 < TOP or y1 > TEXT_BOTTOM or x1 > TEXT_RIGHT:
             bad.append(f"safe zone: text at {t:.1f}s box x{x0}-{x1} y{y0}-{y1}")
-    for t, (x0, y0, x1, y1) in face_boxes(video, dur):
+    for t, (x0, y0, x1, y1) in faces:
         if y0 < TOP or y1 > BOTTOM or x1 > RIGHT:
             over = max(TOP - y0, y1 - BOTTOM, x1 - RIGHT)
             line = f"safe zone: face at {t:.1f}s box x{x0}-{x1} y{y0}-{y1}"
             bad.append(WARN + line if over <= FACE_WARN_PX else line)
+    if bad:  # violation: write the zone image next to the clip and name it in the report
+        zone_overlay(video, cdir / "zones.png", texts, faces, t=float(bad[0].split(" at ")[1].split("s")[0]))
+        bad.append(WARN + "safe zone: overlay written to zones.png")
     return bad
 
 
