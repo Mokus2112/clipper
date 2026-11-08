@@ -13,6 +13,9 @@ def even(x: float) -> int:
     return int(x) // 2 * 2
 
 
+EYE_FRAC = 0.4   # eye line below the face-box top, as a fraction of the box height (identity boxes carry no landmarks)
+
+
 def face_boxes(video: Path, start: float, end: float, timed: bool = False,
                identity: str | None = None) -> tuple[list, int]:
     """Largest face per frame as (x, y, w, h) fractions of the frame, sampled twice per second.
@@ -24,6 +27,7 @@ def face_boxes(video: Path, start: float, end: float, timed: bool = False,
                                          (640, 360), 0.7, 0.3, 50)
     cap = cv2.VideoCapture(str(video))
     boxes: list = []
+    eyes: list[float] = []  # eye line per sample (frame fraction)
     timed_pts: list[tuple[float, float]] = []
     samples = 0
     ref = None
@@ -55,13 +59,16 @@ def face_boxes(video: Path, start: float, end: float, timed: bool = False,
             if good:
                 bx = max(good, key=lambda c: c[0])[1]
                 boxes.append(bx)
+                eyes.append(bx[1] + EYE_FRAC * bx[3])
                 timed_pts.append((t, bx[0] + bx[2] / 2))
                 locked += 1
             t += 0.5
             continue
         _, faces = detector.detect(small)
         if faces is not None and len(faces):
-            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])[:4]
+            big = max(faces, key=lambda f: f[2] * f[3])
+            x, y, w, h = big[:4]
+            eyes.append(float((big[5] + big[7]) / 2 / H))  # YuNet landmarks 4-7: right and left eye
             bx = (float(max(x, 0) / W), float(max(y, 0) / H), float(w / W), float(h / H))
             boxes.append(bx)
             timed_pts.append((t, bx[0] + bx[2] / 2))
@@ -70,6 +77,7 @@ def face_boxes(video: Path, start: float, end: float, timed: bool = False,
     face_boxes.last_identity = {"locked": locked, "other_faces": others, "samples": samples}
     face_boxes.last_top = min((b[1] for b in boxes), default=None)  # highest face top seen (frame fraction)
     face_boxes.last_bottom = max((b[1] + b[3] * 1.04 for b in boxes), default=None)  # lowest chin seen, beard margin (qa.FACE_BEARD_MARGIN)
+    face_boxes.last_eye = sorted(eyes)[len(eyes) // 2] if eyes else None  # typical eye line (frame fraction)
     return (timed_pts, samples) if timed else (boxes, samples)
 
 
@@ -215,6 +223,29 @@ def face_top_pad(face_top: float | None, sh: int, ch: int, H: int, need: int = C
     return min(pad + pad % 2, FACE_TOP_PAD_MAX)
 
 
+EYELINE_Y = 640   # px in the 1920 frame: eyes in the upper third, clear of the top UI zone (video #207)
+
+
+def eyeline_pad(eye: float | None, chin: float | None, sh: int, ch: int, H: int, target: int = EYELINE_Y) -> int:
+    """Blurred top pad (px) that lowers an eye line above `target` towards it; the chin stays above FACE_BOTTOM_MAX.
+
+    eye and chin are source-frame fractions (same convention as face_top_pad). Eyes already at or below the target: 0.
+    """
+    if eye is None or chin is None:
+        return 0
+    te, tb = (min(max(f * sh / ch, 0.0), 0.99) for f in (eye, chin))
+    if te * H >= target:
+        return 0
+    want = (target - te * H) / (1 - te)
+    room = (FACE_BOTTOM_MAX - tb * H) / (1 - tb)   # the chin lands at pad + tb*(H-pad)
+    return max(0, int(min(want, room, FACE_TOP_PAD_MAX))) // 2 * 2
+
+
+def center_pad(src_pad: int, face_top, face_eye, face_bottom, sh: int, ch: int, H: int) -> int:
+    """Top pad of a centre layout: source option, face top above the UI zone, eyeline target (largest wins)."""
+    return max(src_pad, face_top_pad(face_top, sh, ch, H), eyeline_pad(face_eye, face_bottom, sh, ch, H))
+
+
 def crop_x_bounds(source: dict, sw: int, cw: int, crop_h: float) -> tuple[int, int]:
     """Allowed crop x range so the crop never shows a source's overlay rects (chat, viewer count,
     sub goal, logos). Rects are [x, y, w, h] fractions; only rects reaching into the crop height count."""
@@ -233,7 +264,8 @@ def crop_x_bounds(source: dict, sw: int, cw: int, crop_h: float) -> tuple[int, i
 
 def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam: list[float] | None,
                   inp: str, out: str, track: list | None = None, seg_start: float = 0.0,
-                  face_at: float = 0.5, source: dict | None = None, face_top: float | None = None) -> str:
+                  face_at: float = 0.5, source: dict | None = None, face_top: float | None = None,
+                  face_eye: float | None = None, face_bottom: float | None = None) -> str:
     rc = cfg["render"]
     W, H = rc["width"], rc["height"]
     sw, sh = info["width"], info["height"]
@@ -271,7 +303,7 @@ def layout_filter(cfg: dict, info: dict, layout: str, cx: float | None, facecam:
     # Face-tracked crop: a close-up whose face top rides above the top UI zone gets a blurred top margin
     # (smaller zoom) so the face top lands >= CROP_FACE_TOP_MIN px. The QA limit itself stays untouched.
     if face_top is not None:
-        top_pad = max(top_pad, face_top_pad(face_top, sh, ch, H))
+        top_pad = center_pad(top_pad, face_top, face_eye, face_bottom, sh, ch, H)
     fg_h = H - top_pad
     cw = min(sw, even(ch * W / fg_h))
     lo, hi = crop_x_bounds(src, sw, cw, crop_h)
@@ -824,13 +856,13 @@ def punch_expr(steps: list[float], amp: float = PUNCH_AMP, ramp: float = PUNCH_R
 
 
 def punch_plan(face_top: float, face_bottom: float, amp: float = PUNCH_AMP, top_min: float = 220.0,
-               bottom_max: float | None = None, min_amp: float = 0.06) -> tuple[float, float] | None:
+               bottom_max: float | None = None, min_amp: float = 0.06, pivot: float | None = None) -> tuple[float, float] | None:
     """(anchor y, amplitude) of a punch-in that keeps the face inside [top_min, bottom_max] (output px).
 
     A zoom about y=A moves the face top to A+(top-A)z and the chin to A+(bottom-A)z. Both must stay inside
-    the safe band (forehead below the top UI zone, chin above the caption). The anchor is the chin, so the
-    chin (the edge the caption sits under) stays put and the forehead grows upward into free space; when
-    that does not fit, the nearest anchor that does; the amplitude drops towards `min_amp` when the
+    the safe band (forehead below the top UI zone, chin above the caption). The anchor is the eye line when
+    `pivot` is given (the eyes do not move on a zoom, video #207), else the chin (the edge the caption sits
+    under); when that does not fit, the nearest anchor that does; the amplitude drops towards `min_amp` when the
     face is too tall for the full zoom. None: no punch-in fits, the layout stays static.
     """
     bm = FACE_BOTTOM_MAX if bottom_max is None else bottom_max
@@ -840,7 +872,7 @@ def punch_plan(face_top: float, face_bottom: float, amp: float = PUNCH_AMP, top_
         z = 1 + a
         lo, hi = (face_bottom * z - bm) / a, (face_top * z - top_min) / a
         if lo <= hi + 1e-9:
-            return min(max(face_bottom, lo), hi), a
+            return min(max(face_bottom if pivot is None else pivot, lo), hi), a
     return None
 
 
@@ -1849,6 +1881,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
         face_top = getattr(face_boxes, "last_top", None) if layout in ("center", "auto") else None
         # chin bottom of the same main-range face_boxes() call; per-segment calls below overwrite last_bottom
         face_bottom = getattr(face_boxes, "last_bottom", None) if layout in ("center", "auto") else None
+        face_eye = getattr(face_boxes, "last_eye", None) if layout in ("center", "auto") else None
         if track:
             log(f"  tracking: {len(track)} face samples")
         if source.get("identity") and layout in ("center", "auto"):
@@ -1957,7 +1990,7 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 n_out = round(nframes[i] * float(rc["fps"]) / info["fps"]) if rc["fps"] else nframes[i]
                 graph.append(f"[{i}:v]setpts=PTS-STARTPTS,fps={rc['fps']},trim=end_frame={n_out}[z{i}]")
                 graph.append(layout_filter(cfg, info, layout, cx, cam, f"z{i}", f"l{i}",
-                                           track=seg_track, seg_start=s, face_top=face_top,
+                                           track=seg_track, seg_start=s, face_top=face_top, face_eye=face_eye, face_bottom=face_bottom,
                                            source=source if (source.get("campaign_url") or source.get("montage")) else None))
             # Short audio fades at every cut so word-boundary splices do not click.
             fi, fo, dur = AUDIO_FADE_IN, AUDIO_FADE_OUT, (nframes[i] - 0.5) / fps
@@ -1984,10 +2017,11 @@ def render(cfg: dict, job_id: str) -> list[Path]:
             ay, amp = rc["height"] * 0.35, pc.get("amp", PUNCH_AMP)
             if layout == "center" and face_top is not None:
                 chh = even(sh_ * (source.get("crop_h", 1.0)))
-                pad = max(int(source.get("top_pad", 0)), face_top_pad(face_top, sh_, chh, rc["height"]))
+                pad = center_pad(int(source.get("top_pad", 0)), face_top, face_eye, face_bottom, sh_, chh, rc["height"])
                 to_out = lambda f: pad + min(max(f * sh_ / chh, 0.0), 0.99) * (rc["height"] - pad)  # noqa: E731
                 fb = face_bottom
-                plan = punch_plan(to_out(face_top), to_out(fb if fb is not None else face_top + 0.3), amp)
+                plan = punch_plan(to_out(face_top), to_out(fb if fb is not None else face_top + 0.3), amp,
+                                  pivot=None if face_eye is None else to_out(face_eye))
                 if plan is None:
                     log("  punch-in skipped: the face does not fit the safe band with a >= 1.06 zoom")
                     steps = []
