@@ -3,7 +3,7 @@ from pathlib import Path
 
 import yaml
 
-from clipper.render import SAFE_TOP, build_ass
+from clipper.render import PLAIN_HOOK_END, SAFE_TOP, build_ass
 from clipper.textfit import drawn_width, font_file
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -140,3 +140,12 @@ def test_hook_box_stays_when_slot_exists():
     ass = build_ass(CFG, clip, [(0.0, 10.0, 0.0)], "center", None, FONTS)
     assert hook_box(ass) and abs(hook_end(ass) - CFG["hook"]["seconds"]) < 0.02
     assert any(secs(l.split(",")[1]) < 2.0 for l in caps(ass))  # captions run normally
+
+
+def test_plain_hook_end_recorded_for_caption_shift_filter():
+    clip = {"id": "t-c1", "hook": "He paid Target $1M for a shelf", "words": words("he paid target", 0.5),
+            "head": [241, 1079], "cold_len": 1.5}
+    ass = build_ass(CFG, clip, [(0.0, 1.5, 0.0), (1.5, 10.0, 1.5)], "center", None, FONTS)
+    end = secs(re.search(r"Dialogue: 3,[\d:.]+,([\d:.]+),HookText", ass).group(1))
+    assert abs(PLAIN_HOOK_END["t-c1"] - end) < 0.02
+    PLAIN_HOOK_END.pop("t-c1")

@@ -1304,6 +1304,7 @@ CAP_X = (SAFE_LEFT + SAFE_RIGHT_X) // 2   # text centre, shifted left of the fra
 TOP_BLUR: dict[str, list[list[float]]] = {}  # clip id -> [t0, t1, x0, y0, x1, y1] blurred patches (source text in the top strip)
 PUNCH_OFF: set[str] = set()   # clips re-rendered without punch-in after it put the zoom on a face (QA)
 CAP_SHIFT: dict[str, list[list[float]]] = {}  # clip id -> [t0, t1, dy] caption moves (burned-in source text)
+PLAIN_HOOK_END: dict[str, float] = {}  # clip id -> end of the plain-text hook (it sits in the caption band)
 
 
 HOOK_BAR = 10          # yellow accent bar at the left edge of the hook box, px
@@ -1591,6 +1592,7 @@ def hook_events(cfg: dict, clip: dict, segments, shot_spans, fonts_dir, cap_font
         t_end = min(t_end, HOOK_SHORT_S)
         cap_y = cap_top + _cap_h(cap_font, cc["size"]) / 2 + cc["outline"]
         log(f"  hook: no head-free slot, plain text in the caption band for {t_end:.1f} s")
+        PLAIN_HOOK_END[clip.get("id", "")] = t_end
         tag = f"\\an5\\pos({CAP_X},{cap_y:.0f})\\fs{size}\\bord6\\3c&H00000000&\\shad2\\blur1"
         return [f"Dialogue: 3,{ass_time(0.0)},{ass_time(t_end)},HookText,,0,0,0,,{{{tag}}}{text}"], t_end
     if yc != hc["y"] or sz != size:
@@ -2152,6 +2154,9 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                 continue
         if clip["id"] not in CAP_SHIFT:
             shifts = plan_caption_shift(cdir, fonts)
+            # A span that starts inside the plain-text hook window saw the hook itself as burned-in text:
+            # shifting would push the captions after it onto the face (ICH c1, Codee #2659).
+            shifts = [x for x in shifts if x[0] >= PLAIN_HOOK_END.get(clip["id"], 0.0)]
             if shifts:
                 # Source lower-third/inset under the captions: move them clear and render this clip again.
                 CAP_SHIFT[clip["id"]] = shifts
