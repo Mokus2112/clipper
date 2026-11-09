@@ -109,6 +109,7 @@ hook:
   fill_alpha: "&H26&"
   font: Bebas Neue
   seconds: 2.5
+  avoid_face: true    # no head-free slot for the box: big plain text in the caption band, 2.0 s (Codee #2649)
   size: 112           # shrinks to fit the safe width ...
   min_size: 80        # ... never below this (rank.py keeps hooks <= 28 chars / 5 words)
   pad: 18

@@ -76,13 +76,23 @@ def test_hook_one_fixed_position_and_short_on_tight_closeup():
     box = hook_box(ass)
     assert box and abs((box[0] + box[1]) / 2 - y) < 1 and box[0] >= SAFE_TOP
     assert abs(hook_end(ass) - CFG["hook"]["seconds"]) < 0.02
-    # head too high: same position, but at most 2.0 s
+    # head under the default box: moved under the chin (one position, full window, inside the safe zone)
     geo = {"ft": 330, "fb": 900, "cap": 1.0, "t0": 0.0}
     ass = build_ass(CFG, clip, [(0.0, 10.0, 0.0)], "shots", [(0.0, 5.0, "face", geo)], FONTS)
     box = hook_box(ass)
-    assert abs((box[0] + box[1]) / 2 - y) < 1
-    assert hook_end(ass) <= 2.0 + 0.02
+    assert box and box[0] >= 940 and box[0] >= SAFE_TOP
+    assert abs(hook_end(ass) - CFG["hook"]["seconds"]) < 0.02
     assert len([l for l in ass.splitlines() if l.startswith("Dialogue") and "HookBox" in l]) == 2  # no per-shot jumping
+
+
+def test_hook_clears_head_in_center_layout():
+    clip = {"hook": "He paid Target $1M for a shelf", "words": [], "head": [330, 900]}
+    ass = build_ass(CFG, clip, [(0.0, 10.0, 0.0)], "center", None, FONTS)
+    box = hook_box(ass)
+    assert box and box[0] >= 940 and box[0] >= SAFE_TOP  # overlap with the static face box: under the chin
+    clip["head"] = [700, 1000]
+    box = hook_box(build_ass(CFG, clip, [(0.0, 10.0, 0.0)], "center", None, FONTS))
+    assert abs((box[0] + box[1]) / 2 - CFG["hook"]["y"]) < 1  # no overlap: default y
 
 
 def test_no_fade_on_short_chunk_and_short_words_merge():
@@ -109,3 +119,24 @@ def test_fade_start_alpha_can_be_set_in_config():
     cfg["captions"]["fade_start_alpha"] = 0
     ass = build_ass(cfg, {"words": words("one two three four five six")}, [(0.0, 10.0, 0.0)], "center", None, FONTS)
     assert "\\fade(0,0,0,0," in ass
+
+
+def test_hook_plain_text_in_caption_band_when_no_slot():
+    clip = {"hook": "He paid Target $1M for a shelf", "words": words("he paid target a million dollars for it", 0.5),
+            "head": [241, 1079], "cold_len": 1.5}  # face fills the frame: no slot
+    ass = build_ass(CFG, clip, [(0.0, 1.5, 0.0), (1.5, 10.0, 1.5)], "center", None, FONTS)
+    assert hook_box(ass) is None and "HookBox," not in ass.split("[Events]")[1]
+    m = re.search(r"Dialogue: 3,[\d:.]+,([\d:.]+),HookText", ass)
+    end = secs(m.group(1))
+    assert 0 < end <= 2.0 + 0.02
+    assert all(secs(l.split(",")[2]) > end for l in caps(ass))  # no caption in the hook window
+    assert all(secs(l.split(",")[1]) >= end - 1e-6 for l in caps(ass))
+    pos = re.search(r"HookText.*?\\pos\((\d+),(\d+)\)", ass)
+    assert int(pos.group(2)) > 1000  # caption band, not the top
+
+
+def test_hook_box_stays_when_slot_exists():
+    clip = {"hook": "He paid Target $1M for a shelf", "words": words("he paid target", 0.5), "head": [700, 1000]}
+    ass = build_ass(CFG, clip, [(0.0, 10.0, 0.0)], "center", None, FONTS)
+    assert hook_box(ass) and abs(hook_end(ass) - CFG["hook"]["seconds"]) < 0.02
+    assert any(secs(l.split(",")[1]) < 2.0 for l in caps(ass))  # captions run normally

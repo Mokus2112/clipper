@@ -1307,6 +1307,7 @@ CAP_SHIFT: dict[str, list[list[float]]] = {}  # clip id -> [t0, t1, dy] caption 
 
 
 HOOK_BAR = 10          # yellow accent bar at the left edge of the hook box, px
+HOOK_SCALE_MIN = 0.85  # hook box may shrink this much to clear a head
 HOOK_HAIR = 0.35       # close-up: hair above the face box, as a share of the face height
 HOOK_DUO_GAP = 140     # duo: hook centre above the duo caption centre (reviewer: >= 140 centre gap)
 H_HALF = 960           # duo seam (output px): the hook stays in the upper panel
@@ -1459,8 +1460,10 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
         f"&H00000000,&H00000000,{-1 if hc.get('bold', False) else 0},0,0,0,100,100,{hc.get('spacing', 0)},0,1,0,0,4,0,0,0,1",
         "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
+    cap_from = 0.0  # captions start after a plain-text hook (it sits in the caption band)
     if hc["enabled"] and clip.get("hook"):
-        lines += hook_events(cfg, clip, segments, shot_spans, fonts_dir, cap_font)
+        hook_lines, cap_from = hook_events(cfg, clip, segments, shot_spans, fonts_dir, cap_font)
+        lines += hook_lines
     lines += badge_events(cfg, clip, segments, fonts_dir, cap_font, shot_spans)
 
     max_w = cc.get("max_width", SAFE_RIGHT_X - SAFE_LEFT - 70)
@@ -1522,6 +1525,7 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
                 fade_tag = (f"\\fade({cc.get('fade_start_alpha', FADE_START_ALPHA)},0,0,0,{fade},{FADE_HOLD_MS},{FADE_HOLD_MS})"
                             if fade and chunk_t1 - chunk_t0 >= 0.2 and t1 - t0 >= 0.2 else "")
                 for a, b, yy in placed(t0 - seg_s + off, t1 - seg_s + off):
+                    a = max(a, cap_from)
                     if b - a < 0.05:
                         continue  # a sliver flashes one frame at a cut, lit during silence
                     tags = f"\\pos({CAP_X},{yy})" + (f"\\blur{blur}" if blur else "") + (fade_tag if first else "")
@@ -1533,12 +1537,13 @@ def build_ass(cfg: dict, clip: dict, segments: list[tuple[float, float, float]],
     return "\n".join(lines) + "\n"
 
 
-def hook_events(cfg: dict, clip: dict, segments, shot_spans, fonts_dir, cap_font) -> list[str]:
+def hook_events(cfg: dict, clip: dict, segments, shot_spans, fonts_dir, cap_font) -> tuple[list[str], float]:
     """The hook: one line of text in a dark box with a yellow bar, left-aligned at the safe edge.
 
     The font shrinks to fit the safe width, never below hook.min_size (rank.py keeps hooks short
     enough). On close-ups the box goes above the hair or under the chin with room to the captions;
-    if neither fits, that shot gets no hook (reviewer: the hook never sits on the head).
+    if neither fits (hook.avoid_face), the hook is plain text in the caption band for HOOK_SHORT_S.
+    Returns (ASS lines, time before which captions stay off).
     """
     cc, hc, rc = cfg["captions"], cfg["hook"], cfg["render"]
     font = _fonts(fonts_dir, hc.get("font", cc["font"]))
@@ -1555,22 +1560,44 @@ def hook_events(cfg: dict, clip: dict, segments, shot_spans, fonts_dir, cap_font
         tw = _width(font, text, size, hc.get("spacing", 0))
     if tw > avail:
         log(f"  WARN hook {text!r} is {tw:.0f} px at {size} px, wider than {avail} px")
-    ch = _cap_h(font, size)
-    bh = ch + 2 * pad
-    x0, x1 = SAFE_LEFT, SAFE_LEFT + HOOK_BAR + pad + min(tw, avail) + pad
     cap_top = cc.get("y_shots_face", 1195) - _cap_h(cap_font, cc["size"]) / 2 - cc["outline"]
-
-    yc = hc["y"]  # ONE fixed position for the whole hook window, in every layout (reviewer #274: no jumping)
-    y0, y1 = yc - bh / 2, yc + bh / 2
     cold = clip.get("cold_len", segments[0][1] - segments[0][0] if len(segments) > 1 else 0.0)
     t_end = cold + hc["seconds"]
-    # Close-up with no room above the hair for the box: the hook is shown only HOOK_SHORT_S, not for the full window.
-    for a, b, kind, *rest in (shot_spans or []):
-        geo = rest[0] if rest else None
-        if kind.startswith("face") and geo and max(a, 0.0) < t_end and b > cold and y1 > geo["ft"] - (HOOK_HAIR * (geo["fb"] - geo["ft"]) + 10):
-            t_end = min(t_end, cold + HOOK_SHORT_S)
-            log(f"  hook: head too high for the box at y{yc:.0f}, hook limited to {HOOK_SHORT_S:.1f} s")
+    # Close-ups in the hook window: the head (face box + hair margin) the box must stay clear of.
+    heads = [(geo["ft"] - (HOOK_HAIR * (geo["fb"] - geo["ft"]) + 10), geo["fb"])
+             for a, b, kind, *rest in (shot_spans or [])
+             if kind.startswith("face") and (geo := rest[0] if rest else None) and "ft" in geo
+             and max(a, 0.0) < t_end and b > cold]
+    if clip.get("head"):  # centre layout: one static face box (output px) for the whole clip
+        ft, fb = clip["head"]
+        heads.append((ft - (HOOK_HAIR * (fb - ft) + 10), fb))
+        cap_top = cc.get("y_center", 1180) - _cap_h(cap_font, cc["size"]) / 2 - cc["outline"]
+    top, bot = min((h[0] for h in heads), default=0.0), max((h[1] for h in heads), default=0.0)
+    # ONE position for the whole hook window, in every layout (reviewer #274: no jumping). Default y; if the box
+    # would touch a head: under the chin, else above the hair at the safe edge; else (hook.avoid_face) the hook
+    # becomes big plain text in the caption band for HOOK_SHORT_S, no box (Codee #2649, reviewer #2647).
+    if not hc.get("avoid_face"):
+        heads = []
+    for k in (1.0, HOOK_SCALE_MIN):
+        sz = size if k == 1.0 else max(int(size * k), HOOK_FLOOR)
+        w = min(_width(font, text, sz, hc.get("spacing", 0)), avail)
+        bh = _cap_h(font, sz) + 2 * pad
+        slots = [hc["y"]] + ([bot + 40 + bh / 2, SAFE_TOP + bh / 2] if heads else [])
+        yc = next((y for y in slots if not (heads and y + bh / 2 > top and y - bh / 2 < bot)
+                   and y - bh / 2 >= SAFE_TOP and y + bh / 2 + HOOK_CAP_GAP <= cap_top), None)
+        if yc is not None:
             break
+    else:
+        t_end = min(t_end, HOOK_SHORT_S)
+        cap_y = cap_top + _cap_h(cap_font, cc["size"]) / 2 + cc["outline"]
+        log(f"  hook: no head-free slot, plain text in the caption band for {t_end:.1f} s")
+        tag = f"\\an5\\pos({CAP_X},{cap_y:.0f})\\fs{size}\\bord6\\3c&H00000000&\\shad2\\blur1"
+        return [f"Dialogue: 3,{ass_time(0.0)},{ass_time(t_end)},HookText,,0,0,0,,{{{tag}}}{text}"], t_end
+    if yc != hc["y"] or sz != size:
+        log(f"  hook: box at y{yc:.0f}, size {sz}, to stay clear of the head")
+    size = sz
+    x0, x1 = SAFE_LEFT, SAFE_LEFT + HOOK_BAR + pad + w + pad
+    y0, y1 = yc - bh / 2, yc + bh / 2
     off = _cap_off(font, size)
     t = f"{ass_time(0.0)},{ass_time(t_end)}"
     rect = lambda u0, u1: f"m {u0:.0f} {y0:.0f} l {u1:.0f} {y0:.0f} l {u1:.0f} {y1:.0f} l {u0:.0f} {y1:.0f}"
@@ -1580,10 +1607,7 @@ def hook_events(cfg: dict, clip: dict, segments, shot_spans, fonts_dir, cap_font
         f"Dialogue: 2,{t},HookBox,,0,0,0,,{{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\c{hc['box']}}}{rect(x0, x0 + HOOK_BAR)}",
         f"Dialogue: 3,{t},HookText,,0,0,0,,{{\\an4\\pos({x0 + HOOK_BAR + pad},{yc - off:.0f})\\fs{size}}}{text}",
     ]
-    shown = t_end
-    if shown < 1.0:
-        log(f"  WARN hook shown only {shown:.2f} s (no head-free slot on the close-ups)")
-    return out
+    return out, 0.0
 
 
 BADGE_SECONDS = 2.0     # s a keyword badge stays on screen
@@ -1949,6 +1973,11 @@ def render(cfg: dict, job_id: str) -> list[Path]:
                     clip = {**clip, "words": fixed}
             except Exception as exc:  # noqa: BLE001 - the check must never block a render
                 log(f"{clip['id']}: caption retiming skipped ({exc})")
+        if layout == "center" and face_top is not None and face_bottom is not None:
+            chh_ = even(info["height"] * source.get("crop_h", 1.0))
+            pad_ = center_pad(int(source.get("top_pad", 0)), face_top, face_eye, face_bottom, info["height"], chh_, rc["height"])
+            clip = {**clip, "head": [pad_ + min(max(f * info["height"] / chh_, 0.0), 0.99) * (rc["height"] - pad_)
+                                     for f in (face_top, face_bottom)]}
         (cdir / "captions.ass").write_text(build_ass(cap_cfg, clip, segments, layout, shot_spans, fonts))
 
         inputs, graph, concat = [], [], ""
